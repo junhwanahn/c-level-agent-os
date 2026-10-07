@@ -1,0 +1,77 @@
+# Owner action queue + dated items (single source of truth)
+# Copy to: config/owner_action_queue.yaml
+#
+# Purpose: dated items must not slip while sessions are inactive. The reporting layer reads
+# this file and renders the top of every periodic report WITHOUT an LLM (no judgment, no
+# softening). See docs/03-owner-action-queue.md.
+#
+# Required fields
+#   id:      unique, stable (snake_case + date suffix helps)
+#   due:     "YYYY-MM-DD"   (for an approval item, due = the date the request must be ready,
+#                            not the date of the event itself)
+#   owner:   human | ceo | <agent name>
+#   title:   one line; what, and where the prepared material lives
+#   status:  open | done | dropped
+#   done_at: "YYYY-MM-DD"   (fill when status becomes done)
+#
+# Owner action queue (all must hold: owner: human, status: open, ready: true)
+#   action:  external | local | facts
+#            external = send/post/pay/sign/authorize outside the company
+#            local    = not external, but needs the owner's hands (terminal, OAuth consent, hardware key)
+#            facts    = a fact only the owner knows
+#   ready:   true only when the draft, attachments and click path are prepared.
+#            Not ready -> leave it out of the queue (keep ready: false) and keep working.
+#   prep:    paths to the prepared material (draft text, attachments, step list)
+#
+# Optional scheduled trigger (needs your own daemon; docs/05):
+#   trigger_at:     "2026-01-15T09:05:00Z"   timezone required (Z or +hh:mm); naive = invalid
+#   trigger_prompt: "instruction to run at that time"
+#   trigger_agent:  strategy_a               run the prompt as that headless agent (logic_agents.yaml)
+#   trigger_tools:  false                    tools off by default; true = opt-in
+#   Changing trigger_at re-schedules (dedupe key = id + trigger_at).
+#
+# Completion: set status: done and done_at. Add new items by appending; no code change needed.
+
+- id: send_partner_reply_0115
+  due: "2026-01-15"
+  owner: human
+  title: "Send reply to partner X (draft final, 6 lines)"
+  status: open
+  action: external
+  ready: true
+  prep:
+    - drafts/2026-01-14-partner-reply.md
+    - "Click path: mail client > thread 'Intro' > paste draft > attach drafts/onepager.pdf > send"
+
+- id: reauth_video_api_0116
+  due: "2026-01-16"
+  owner: human
+  title: "Approve OAuth consent for the video upload API (command prepared)"
+  status: open
+  action: local
+  ready: true
+  prep:
+    - "Run: python3 scripts/reauth.py --auth-only  (opens the consent page; click Allow)"
+
+- id: confirm_prior_commitment_0117
+  due: "2026-01-17"
+  owner: human
+  title: "Did we already promise customer Y a delivery date? (yes/no + date)"
+  status: open
+  action: facts
+  ready: true
+
+- id: weekly_review_0116
+  due: "2026-01-16"
+  owner: ceo
+  title: "Weekly review: block budget per open topic, close or extend"
+  status: open
+  trigger_at: "2026-01-16T09:05:00Z"
+  trigger_prompt: "Run the weekly review and append the result to HANDOFF.md"
+
+- id: rerun_analysis_0114
+  due: "2026-01-14"
+  owner: ceo
+  title: "Re-run analysis B with hypothesis 2 (hypothesis 1 rejected)"
+  status: done
+  done_at: "2026-01-14"

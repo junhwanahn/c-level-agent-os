@@ -1,0 +1,120 @@
+# Logic-agent registry (single source of truth)
+# Copy to: config/logic_agents.yaml
+#
+# Why: keeping every project agent open in its own live terminal does not scale for one
+# person. Sessions sit idle for days, messages between sessions arrive only when the
+# receiver is awake, and the owner ends up managing sessions. Instead, each project keeps
+# its own directory (CLAUDE.md, settings, memory, MCP servers, critical-zone boundary) and
+# the CEO agent calls it headless (`claude -p`) from that directory.
+#
+# Call paths (both read this file; never hardcode paths or modes elsewhere):
+#   session: python3 scripts/logic_agent.py <name> -p "<instruction>"
+#   daemon:  an owner_action_queue.yaml item with trigger_agent: <name>  (see docs/05)
+#
+# Permission principle:
+#   A headless run cannot answer permission prompts, so any tool outside the target
+#   directory's .claude/settings*.json allowlist is denied automatically. That is the
+#   protection for critical zones, so the runner never passes --permission-mode.
+#   - allowed_tools widen permissions -> owner decision. Passed only while
+#     permissions_status is "confirmed" (record date / quote / scope below).
+#   - denied_tools only restrict -> CEO decision. Always passed.
+#   - Denylist rules are string patterns and can be bypassed (git -C, find -exec, writes via
+#     python3 ...). Treat them as best effort. The real guarantees are: (1) the allowlist,
+#     (2) the agent's own CLAUDE.md rules, (3) reviewing git history.
+#   - Extra per-call allows (--allowed-tools) are a CEO decision per call and are logged.
+#
+# mode:
+#   headless   = called by the CEO agent. Never open a live session in the same directory
+#                at the same time (one transcript, two processes). A file lock enforces it
+#                for runner calls.
+#   live       = a session the owner uses directly every day. Headless calls are refused.
+#   in_session = runs inside the CEO session as a subagent. Headless calls are refused.
+#
+# Session continuity:
+#   The last headless session id per agent is kept in state/logic_agent_sessions.json and
+#   resumed with --resume. When the transcript exceeds rotate_mb the runner starts a fresh
+#   session and tells the agent to read its handoff file first (resuming a huge transcript
+#   costs context on every turn). `--continue` is never used: it would pick up the most
+#   recent conversation in that directory, which may be the owner's live one.
+#
+# Cutover from live to headless (per agent):
+#   1. the live session writes and commits a handoff block
+#   2. the owner closes that terminal
+#   3. from then on, headless calls only
+
+permissions_status: proposed        # proposed -> confirmed (owner only)
+permissions_confirmed:
+  date: ""                          # YYYY-MM-DD
+  by: ""                            # the owner
+  quote: ""                         # owner's own words, verbatim
+  scope: ""                         # what exactly was confirmed
+
+defaults:
+  model: opus            # execution model; keep judgment in the CEO session
+  effort: high           # passed as --effort only if set; delete if your CLI has no such flag
+  timeout_sec: 900
+  rotate_mb: 3           # transcript size that triggers a fresh session
+  preamble_extra: []     # extra lines appended to every agent's preamble
+  allowed_tools:         # common read-mostly tools for every headless agent
+    - "Bash(git status*)"
+    - "Bash(git log *)"
+    - "Bash(git diff *)"
+    - "Bash(git add *)"
+    - "Bash(git commit *)"
+    - "Bash(ls *)"
+    - "Bash(cat *)"
+    - "Bash(head *)"
+    - "Bash(tail *)"
+    - "Bash(grep *)"
+    - "Bash(wc *)"
+  denied_tools:          # protect data and history; never force-push; no service control over ssh
+    - "Bash(git checkout *)"
+    - "Bash(git restore *)"
+    - "Bash(git stash*)"
+    - "Bash(git reset *)"
+    - "Bash(git -C *)"
+    - "Bash(git push --force*)"
+    - "Bash(git push -f*)"
+    - "Bash(find * -delete*)"
+    - "Bash(find * -exec*)"
+    - "Bash(ssh *systemctl*)"
+    - "Bash(ssh *sudo*)"
+
+agents:
+  strategy_a:
+    path: ~/projects/strategy_a          # absolute, ~, or relative to this project root
+    role: "research and pilot runs for unit A"
+    handoff: docs/SESSION_HANDOFF.md
+    mode: headless
+    notes: "anything the CEO must remember when calling this agent"
+    allowed_tools:
+      - "Edit(//ABSOLUTE/PATH/TO/strategy_a/**)"
+      - "Write(//ABSOLUTE/PATH/TO/strategy_a/**)"
+      - "Bash(python3 research/*)"
+    denied_tools:                        # critical zone: files that move real money or control live services
+      - "Edit(//ABSOLUTE/PATH/TO/strategy_a/live/**)"
+      - "Write(//ABSOLUTE/PATH/TO/strategy_a/live/**)"
+      - "Edit(//ABSOLUTE/PATH/TO/strategy_a/config/**)"
+      - "Write(//ABSOLUTE/PATH/TO/strategy_a/config/**)"
+
+  ops_bot:
+    path: ~/projects/ops_bot
+    role: "operations scripts and reporting jobs"
+    handoff: HANDOFF.md
+    mode: headless
+    allowed_tools:
+      - "Edit(//ABSOLUTE/PATH/TO/ops_bot/**)"
+      - "Write(//ABSOLUTE/PATH/TO/ops_bot/**)"
+    denied_tools: []
+
+  daily_desk:
+    path: ~/projects/daily_desk
+    role: "work the owner does personally every day"
+    handoff: HANDOFF.md
+    mode: live                           # owner's own terminal; never called headless
+
+  research_lab:
+    path: ~/projects/research_lab
+    role: "new-idea sourcing"
+    handoff: HANDOFF.md
+    mode: in_session                     # CEO assigns subagents inside its own session
