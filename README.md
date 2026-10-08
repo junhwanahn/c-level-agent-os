@@ -1,7 +1,7 @@
 # C-Level Agent OS
 
 An operating structure for a one-person company run with an AI executive team on Claude Code:
-a CEO agent, four C-level role agents, project agents called headless, and one queue for the
+a CEO agent, C-level role agents (four templates included: CTO, CRO, CFO, CMO — add a strategy or other role as you need), project agents called headless, and one queue for the
 actions only the human owner can take.
 
 Built and used by a one-person systematic trading firm. Everything domain-specific has been removed.
