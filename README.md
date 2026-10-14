@@ -1,12 +1,44 @@
 # C-Level Agent OS
 
-An operating structure for a one-person company run with an AI executive team on Claude Code:
-a CEO agent, C-level role agents (four templates included: CTO, CRO, CFO, CMO — add a strategy or other role as you need), project agents called headless, and one queue for the
-actions only the human owner can take.
+### One operating structure for a one-person company run by an AI executive team.
 
-Built and used by a one-person systematic trading firm. Everything domain-specific has been removed.
+**Agents prepare everything up to the last click. You take only that click — and nothing that moves money is theirs to touch.**
+
+[![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
+[![skills.sh](https://skills.sh/b/junhwanahn/c-level-agent-os)](https://skills.sh/junhwanahn/c-level-agent-os)
 
 [한국어 README](README.ko.md)
+
+A CEO agent, C-level role agents (four templates included: CTO, CRO, CFO, CMO — add a strategy or other
+role as you need), project agents called headless, and one queue for the actions only the human owner can take.
+Built for Claude Code. Built and used by a one-person systematic trading firm; everything domain-specific has been removed.
+
+## Quick start
+
+```bash
+npx skills add junhwanahn/c-level-agent-os
+```
+
+Then ask your agent: *"Set up the C-Level Agent OS for my company."* The skill has it fetch the templates,
+ask you the placeholder questions, keep permissions at `proposed`, and run the first checks.
+
+### Manual install
+
+Requirements: Claude Code CLI, Python 3.9+, `pip install pyyaml`.
+
+1. **Charter and roles.** Copy `templates/CLAUDE.md.ceo` to your CEO project root as `CLAUDE.md` and fill the
+   `{{...}}` placeholders. Copy `templates/agents/*.md` to `.claude/agents/`.
+2. **Queue and registry.** Copy `templates/owner_action_queue.yaml` and `templates/logic_agents.yaml` into `config/`,
+   and `scripts/logic_agent.py` into `scripts/`. Point each agent's `path` at a real project directory and set its `mode`.
+3. **Check before the first call.**
+   ```bash
+   python3 scripts/logic_agent.py --status
+   python3 scripts/logic_agent.py strategy_a -p "Read your handoff and report status in 5 lines" --dry-run
+   python3 -m pytest tests -q
+   ```
+   Then drop `--dry-run`. Keep `permissions_status: proposed` until you, the owner, confirm the allowlist.
+
+<!-- hero image: docs/assets/approval-required-always.png (pending a capture with no paths, accounts or numbers) -->
 
 ## What this is
 
@@ -24,28 +56,25 @@ Built and used by a one-person systematic trading firm. Everything domain-specif
 - **Not investment, legal or financial advice.** Nothing here tells you what to trade or how.
 - **Not a way to give agents money.** The design keeps payments, transfers, credentials and irreversible
   actions on real capital with the human. Do not give agents custody of funds or payment credentials.
-- Not a hosted product, not a framework to install, and not a guarantee that agents behave.
-  Permission rules reduce risk; they do not remove it. Review what your agents commit.
+- Not a hosted product, not a runtime framework (the skill installs instructions, not a service), and not a
+  guarantee that agents behave. Permission rules reduce risk; they do not remove it. Review what your agents commit.
 
-## Quick start
+## Showcase
 
-Requirements: Claude Code CLI, Python 3.9+, `pip install pyyaml`.
+### Stopping is automatic. Restarting is not.
 
-1. **Charter and roles.** Copy `templates/CLAUDE.md.ceo` to your CEO project root as `CLAUDE.md` and fill the
-   `{{...}}` placeholders. Copy `templates/agents/*.md` to `.claude/agents/`.
-2. **Queue and registry.** Copy `templates/owner_action_queue.yaml` and `templates/logic_agents.yaml` into `config/`,
-   and `scripts/logic_agent.py` into `scripts/`. Point each agent's `path` at a real project directory and set its `mode`.
-3. **Check before the first call.**
-   ```bash
-   python3 scripts/logic_agent.py --status
-   python3 scripts/logic_agent.py strategy_a -p "Read your handoff and report status in 5 lines" --dry-run
-   python3 -m pytest tests -q
-   ```
-   Then drop `--dry-run`. Keep `permissions_status: proposed` until you, the owner, confirm the allowlist.
+The firm that built this ran a live strategy, VOLCANO, under a pre-registered kill-switch. On 2026-09-23
+the kill-switch tripped and was executed as designed. The stop needed no one's decision.
+
+What the agents did next: froze the record and drafted the public write-up. What they did not do:
+touch capital or restart anything. Both stayed with the owner, as `approval_required: always`.
+
+Public record: [crynomad.ai/track-record.html#volcano](https://crynomad.ai/track-record.html#volcano)
 
 ## Layout
 
 ```
+.agents/skills/c-level-agent-os/  skill for `npx skills add`: setup and review steps for your agent
 docs/00-philosophy.md             owner does only the final action; the one question
 docs/01-ceo-charter.md            charter sections, responsibility matrix skeleton
 docs/02-autonomy-policy.md        improvement loop, block budget, persistence

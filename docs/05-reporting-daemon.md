@@ -1,6 +1,6 @@
 # 05. Reporting daemon: design notes
 
-No code here on purpose: the daemon is where your notification channel, scheduler and secrets live,
+No code here on purpose: the daemon is where your notification channel, scheduler and credentials live,
 and those differ per setup. These are the design decisions that held up in daily use.
 
 ## Two-layer periodic report
