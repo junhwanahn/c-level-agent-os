@@ -38,7 +38,7 @@ Requirements: Claude Code CLI, Python 3.9+, `pip install pyyaml`.
    ```
    Then drop `--dry-run`. Keep `permissions_status: proposed` until you, the owner, confirm the allowlist.
 
-<!-- hero image: docs/assets/approval-required-always.png (pending a capture with no paths, accounts or numbers) -->
+<p align="center"><img src="docs/assets/approval-required-always.png" alt="Critical zone: files that move real money are denied to every agent; owner approval always" width="1200" /></p>
 
 ## What this is
 

@@ -39,7 +39,7 @@ npx skills add junhwanahn/c-level-agent-os
    ```
    이후 `--dry-run` 을 빼고 실행한다. 허용 목록을 오너가 확정하기 전까지 `permissions_status: proposed` 를 유지한다.
 
-<!-- hero image: docs/assets/approval-required-always.png (pending a capture with no paths, accounts or numbers) -->
+<p align="center"><img src="docs/assets/approval-required-always.png" alt="크리티컬 존: 돈이 움직이는 파일은 모든 에이전트에게 거부, 사람 승인 항상" width="1200" /></p>
 
 ## 이것은 무엇인가
 
