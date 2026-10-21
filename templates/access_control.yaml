@@ -1,0 +1,13 @@
+# Access control: which directories the CEO may read (R) or read and write (RW).
+# The charter's "Projects and access" table (CLAUDE.md) is the short form of this file; keep both in sync.
+# Other projects change only through their own agent (config/logic_agents.yaml).
+# Copy to: config/access_control.yaml   (scripts/install.py writes it from your answers)
+
+ceo:
+  path: "{{CEO_PROJECT_PATH}}"
+  access: RW
+
+projects:
+  "{{UNIT_1_NAME}}":
+    path: "{{UNIT_1_PATH}}"
+    ceo_access: R

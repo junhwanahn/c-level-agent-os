@@ -22,6 +22,7 @@ Template: [`templates/owner_action_queue.yaml`](../templates/owner_action_queue.
 | `trigger_prompt` | with trigger_at | text | instruction to run |
 | `trigger_agent` | optional | registry name | run as that headless agent ([04](04-logic-agents-headless.md)) |
 | `trigger_tools` | optional | `true` | tools are off by default for scheduled runs |
+| `example` | template only | `true` | marks the template's examples: the daemon skips them, `scripts/doctor.py` fails while one is left, `scripts/install.py` removes them |
 
 ## Render rules (top block of every report)
 

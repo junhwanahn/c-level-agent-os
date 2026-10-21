@@ -20,6 +20,9 @@ Rules (mirrored in the registry header):
     up whatever conversation was opened last in that directory, including a live
     one the owner is using.
   - One process per agent at a time (non-blocking file lock).
+  - A denied rule that is still a template placeholder (//ABSOLUTE/PATH/TO/..., {{...}}) protects
+    nothing: real calls are refused until it is replaced; --dry-run lists it as a warning, together
+    with a missing handoff file and path rules Claude Code ignores (Write(path)).
   - Every call is appended to <state dir>/logic_agent_calls.jsonl.
 
 Usage:
@@ -56,6 +59,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_PROJECTS_DIR = Path(os.path.expanduser("~/.claude/projects"))
 FALLBACK_DEFAULTS = {"model": "opus", "effort": None, "timeout_sec": 900, "rotate_mb": 3}
 _RESUME_MISSING = re.compile(r"no conversation found|session.*not found|could not find session", re.I)
+PLACEHOLDER_MARKERS = ("ABSOLUTE/PATH", "{{")
+_IGNORED_PATH_RULE = re.compile(r"^(Write|NotebookEdit|MultiEdit)\(.+\)$")
 
 
 class LogicAgentError(Exception):
@@ -114,7 +119,28 @@ def resolve(name: str, reg: dict, force_mode: bool = False) -> dict:
                              if confirmed else [])
     spec["denied_tools"] = list(d.get("denied_tools") or []) + list(spec.get("denied_tools") or [])
     spec["preamble_extra"] = list(d.get("preamble_extra") or []) + list(spec.get("preamble_extra") or [])
+    raw_allowed = list(d.get("allowed_tools") or []) + list((agents[name] or {}).get("allowed_tools") or [])
+    spec["placeholder_denied"] = [r for r in spec["denied_tools"] if _is_placeholder(r)]
+    spec["warnings"] = spec_warnings(spec, raw_allowed)
     return spec
+
+
+def _is_placeholder(rule) -> bool:
+    return any(m in str(rule) for m in PLACEHOLDER_MARKERS)
+
+
+def spec_warnings(spec: dict, raw_allowed: Optional[list] = None) -> list:
+    """Problems that do not stop a dry run but mean the registry is not what the owner thinks it is."""
+    out = [f"denied rule is still a placeholder and protects nothing: {r} "
+           f"(replace it with the real path, e.g. Edit(//Users/me/project/live/**))"
+           for r in spec.get("placeholder_denied") or []]
+    out += [f"allowed rule is still a placeholder: {r}" for r in (raw_allowed or []) if _is_placeholder(r)]
+    out += [f"Claude Code never consults {r}; use Edit(...) for the same path"
+            for r in list(spec.get("denied_tools") or []) + list(raw_allowed or []) if _IGNORED_PATH_RULE.match(str(r))]
+    handoff = Path(spec["path"]) / str(spec.get("handoff") or "HANDOFF.md")
+    if not handoff.is_file():
+        out.append(f"handoff file not found: {handoff} (the agent is told to read it first)")
+    return out
 
 
 # ---------------------------------------------------------------- sessions
@@ -282,6 +308,14 @@ def call(name: str, prompt: str, model: Optional[str] = None, effort: Optional[s
     if not (prompt or "").strip():
         raise LogicAgentError("empty prompt")
     spec = resolve(name, load_registry(registry), force_mode=force_mode)
+    if spec["placeholder_denied"] and not dry_run:
+        raise LogicAgentError(f"'{name}': {len(spec['placeholder_denied'])} denied rule(s) still a placeholder "
+                              f"({spec['placeholder_denied'][0]}): the critical zone is not protected. Replace them "
+                              f"in the registry with real paths (Edit(//absolute/path/**)) or set protected_zone: none "
+                              f"and remove them; run python3 scripts/doctor.py")
+    for w in spec["warnings"]:
+        if not dry_run:
+            print(f"[logic_agent] warning: {w}", file=sys.stderr)
     model = model or spec["model"]
     effort = effort or spec.get("effort")
     timeout = int(timeout or spec["timeout_sec"])
@@ -296,6 +330,7 @@ def call(name: str, prompt: str, model: Optional[str] = None, effort: Optional[s
             "extra_allowed": list(extra_allowed or []), "tools_off": tools_off}
     if dry_run:
         return {**base, "cmd": cmd, "preamble": build_preamble(spec, rotated), "dry_run": True,
+                "warnings": list(spec["warnings"]),
                 "result": "", "session_id": session_id or "", "cost_usd": 0.0, "duration_ms": 0,
                 "is_error": False, "rc": 0, "rotated": rotated, "resumed": bool(session_id)}
 
@@ -398,6 +433,11 @@ def main(argv: Optional[list] = None) -> int:
         print(" ".join(json.dumps(c, ensure_ascii=False) if " " in c or "\n" in c else c for c in resp["cmd"]))
         print("--- preamble ---\n" + resp["preamble"])
         print(f"--- session: {resp['session_reason']} | permissions_confirmed={resp['permissions_confirmed']}")
+        for w in resp.get("warnings") or []:
+            print(f"WARNING: {w}")
+        if not resp["permissions_confirmed"]:
+            print("--- allowlist not confirmed: only the tools allowed by the project's own .claude/settings*.json "
+                  "are available; with none, expect a read-only report ending in 'Needed permission: ...'")
         return 0
     print(json.dumps(resp, ensure_ascii=False, indent=2) if a.json else resp["result"])
     meta = (f"[logic_agent] {resp['agent']} session={resp['session_id'][:8]} ({resp['session_reason']}) "

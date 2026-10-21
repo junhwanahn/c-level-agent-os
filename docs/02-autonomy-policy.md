@@ -1,12 +1,13 @@
 # 02. Autonomy policy (template)
 
-Copy the block below to `config/autonomy_policy.md` in the CEO project and fill the `{{...}}`.
-The charter's decision framework is the short form; this file is the detail.
+Template: [`templates/autonomy_policy.md`](../templates/autonomy_policy.md) (the block below, kept identical by a test).
+`scripts/install.py` copies it to `config/autonomy_policy.md` and fills the date, the owner's own words and the
+block budget. The charter's decision framework is the short form; this file is the detail.
 
 ```markdown
-# CEO autonomy policy v1 ({{date}}, owner instruction)
+# CEO autonomy policy v1 ({{INSTALL_DATE}}, owner instruction)
 
-Owner's instruction, verbatim: "{{paste the owner's own words}}"
+Owner's instruction, verbatim: "{{OWNER_INSTRUCTION}}"
 
 ## 1. Two categories only
 | Category | Content | Handling |
@@ -18,14 +19,14 @@ Test: "If the owner does not do this personally, is it physically impossible?" I
 
 ## 2. Improvement loop (runs without asking)
 - Poor result: decompose the cause -> one next hypothesis -> re-instruct the agent.
-- Block budget per topic: {{3}} usage blocks. Inside the budget, report only.
+- Block budget per topic: {{BLOCK_BUDGET}} usage blocks. Inside the budget, report only.
 - Budget or hypotheses exhausted: CEO chooses one of stop / hold / add budget, and reports the outcome.
 - Pre-registration, gates, independent recomputation and negative tests stay. Speed never removes a check.
 - One-shot resources (for example a held-out sample) are used once; the CEO decides when, and only for a decision worth it.
 
 ## 3. Tokens and usage
 - Usage window exhausted: wait, then resume. Do not ask the owner. Pass the same rule to every project agent.
-- Heavy work (> {{N}} tokens expected): split across window boundaries ({{script that reports remaining usage}}).
+- Heavy work: split it across usage-window boundaries; check the remaining usage before starting.
 - Batch instructions to project agents: every turn re-reads context, so fewer, fuller instructions cost less.
 
 ## 3a. Project agents run headless

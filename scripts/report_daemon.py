@@ -18,7 +18,9 @@ interactive session. Every poll (default 60 s) it does two things:
        one retry | tools off unless trigger_tools: true | trigger_agent via scripts/logic_agent.py.
 
 Delivery: Telegram Bot API, split by length (never truncated). The bot token and chat id come
-only from environment variables whose names are in the config.
+only from environment variables whose names are in the config. `delivery: none` only prints the
+report (and keeps the full text under log_dir/reports/), for trying the daemon before a bot exists.
+Queue items marked `example: true` (the template's examples) are ignored.
 
 Usage:
   python3 scripts/report_daemon.py --check-config                 # config, queue, CLI path, env
@@ -84,6 +86,7 @@ DEFAULTS = {
     "report_tools": False,
     "logic_agent_script": "scripts/logic_agent.py",
     "agent_timeout_s": 3600,
+    "delivery": "telegram",
     "telegram": {"token_env": "REPORT_TELEGRAM_TOKEN", "chat_id_env": "REPORT_TELEGRAM_CHAT_ID"},
     "max_chunk": 4000,
     "max_notable": 5,
@@ -96,6 +99,7 @@ _NON_NEGATIVE = ("collision_minutes", "retry_delay_seconds")
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _OFFSET_NO_COLON = re.compile(r"([+-]\d{2})(\d{2})$")
 _TERMINAL = ("done", "missed", "interrupted", "invalid")
+DELIVERY = ("telegram", "none")
 
 
 class ConfigError(Exception):
@@ -181,6 +185,9 @@ def load_config(path) -> dict:
                             f"(name them in telegram.token_env / telegram.chat_id_env)")
     if not isinstance(cfg.get("claude_extra_args") or [], list):
         problems.append("claude_extra_args must be a list")
+    cfg["delivery"] = str(cfg.get("delivery") or "telegram").strip().lower()
+    if cfg["delivery"] not in DELIVERY:
+        problems.append(f"delivery must be one of {', '.join(DELIVERY)} (got {cfg['delivery']!r})")
 
     project_dir = _abs(PROJECT_ROOT, cfg["project_dir"]).resolve()
     inputs = []
@@ -282,8 +289,9 @@ _QueueLoader.yaml_implicit_resolvers = {
     for ch, rs in yaml.SafeLoader.yaml_implicit_resolvers.items()}
 
 
-def load_queue(path) -> tuple:
-    """(items, warning or None). A missing or broken file gives an empty list and a warning, never an exception."""
+def load_queue(path, examples: bool = False) -> tuple:
+    """(items, warning or None). A missing or broken file gives an empty list and a warning, never an exception.
+    Items marked `example: true` (the template's examples) are dropped unless examples=True."""
     p = Path(path)
     if not p.is_file():
         return [], f"queue file not found: {p}"
@@ -297,6 +305,8 @@ def load_queue(path) -> tuple:
         return [], f"queue file must be a YAML list of items: {p}"
     items = [i for i in data if isinstance(i, dict)]
     skipped = len(data) - len(items)
+    if not examples:
+        items = [i for i in items if i.get("example") is not True]
     return items, (f"{skipped} queue entries are not mappings and were ignored: {p}" if skipped else None)
 
 
@@ -764,7 +774,7 @@ class Daemon:
     def deliver(self, text: str) -> tuple:
         """(ok, error, chunk count). Dry run prints to stdout. Without credentials the text still goes to stdout."""
         chunks = label_chunks(text, int(self.cfg["max_chunk"]))
-        if self.dry_run:
+        if self.dry_run or self.cfg.get("delivery") == "none":
             print("\n\n".join(chunks), file=self.out)
             print("", file=self.out)
             return True, "", len(chunks)
@@ -877,7 +887,9 @@ class Daemon:
             self._save_text("reports", f"{key}_{_iso(now)}", text)
             self.reports.append({"ts": _iso(self.now()), "slot": key, "event": "sent" if ok else "send_failed",
                                  "label": label, "chunks": n, "error": err, **meta})
-        self.log(f"report {when} [{label}]: {'sent' if ok else 'NOT delivered'} ({n} chunks)"
+        done = ("printed only (dry run)" if self.dry_run else
+                "printed and saved (delivery: none)" if self.cfg.get("delivery") == "none" else "sent")
+        self.log(f"report {when} [{label}]: {done if ok else 'NOT delivered'} ({n} chunks)"
                  + ("" if meta["model_ok"] in (None, True) else f", model failed: {meta['model_error']}"))
         return ok
 
@@ -1116,8 +1128,10 @@ def _registry_agents(cfg: dict) -> Optional[dict]:
         return None
 
 
-def check_config(path) -> list:
-    """[(level, message)] with level ok | warn | error. Never prints a secret value."""
+def check_config(path, env_required: bool = True) -> list:
+    """[(level, message)] with level ok | warn | error. Never prints a secret value.
+    env_required=False (used by scripts/doctor.py) reports missing Telegram variables as a warning: the
+    service reads them from its own definition, which the owner fills after install."""
     try:
         cfg = load_config(path)
     except ConfigError as e:
@@ -1135,6 +1149,9 @@ def check_config(path) -> list:
     res.append(("error", qwarn) if qwarn and not items else ("ok", f"queue {cfg['queue_path']}: {len(items)} items"))
     if qwarn and items:
         res.append(("warn", qwarn))
+    n_examples = len(load_queue(cfg["queue_path"], examples=True)[0]) - len(items)
+    if n_examples > 0:
+        res.append(("warn", f"queue has {n_examples} template example item(s) (example: true): ignored; delete them"))
     plans = Daemon(cfg, dry_run=True).plan_triggers(items, now)
     agents = _registry_agents(cfg)
     for p in plans:
@@ -1182,15 +1199,19 @@ def check_config(path) -> list:
     tg = cfg["telegram"]
     token = os.environ.get(str(tg.get("token_env") or ""), "").strip()
     chat = os.environ.get(str(tg.get("chat_id_env") or ""), "").strip()
-    if token and chat:
+    if cfg["delivery"] == "none":
+        res.append(("warn", f"delivery: none - reports are printed and saved under {cfg['log_dir']}/reports/, "
+                            f"not sent. Set delivery: telegram to receive them"))
+    elif token and chat:
         res.append(("ok", f"telegram env {tg['token_env']} and {tg['chat_id_env']} set (values not shown)"))
         if not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", token):
             res.append(("warn", f"{tg['token_env']} does not look like a bot token (<digits>:<secret>)"))
         if not re.match(r"^(-?\d+|@\w+)$", chat):
             res.append(("warn", f"{tg['chat_id_env']} does not look like a chat id (number, or @channel)"))
     else:
-        res.append(("error", f"set {tg['token_env']} and {tg['chat_id_env']} in the environment (and in the "
-                             f"service definition: launchd EnvironmentVariables / systemd EnvironmentFile)"))
+        res.append(("error" if env_required else "warn",
+                    f"set {tg['token_env']} and {tg['chat_id_env']} in the environment (and in the "
+                    f"service definition: launchd EnvironmentVariables / systemd EnvironmentFile)"))
     return res
 
 

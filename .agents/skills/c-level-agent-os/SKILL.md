@@ -1,12 +1,14 @@
 ---
 name: c-level-agent-os
-description: Use when asked to set up or review a one-person company's AI executive structure — CEO charter, C-level role agents, owner action queue, and headless project agents with permission boundaries.
+description: Use when asked to set up or review a one-person company's AI executive structure — CEO charter, C-level role agents, owner action queue, reporting daemon, and headless project agents with permission boundaries.
 ---
 
 # C-Level Agent OS
 
 You are installing or reviewing an operating structure in which agents prepare and execute the
 company's work and the human owner only takes the final action. Read this whole file before acting.
+You install with the same script the owner would run (`scripts/install.py`) and you show the owner the
+check it ends with (`scripts/doctor.py`). Do not copy or fill templates by hand.
 
 ## Hard rules (never relax them)
 
@@ -16,53 +18,91 @@ company's work and the human owner only takes the final action. Read this whole 
    quoted with date and time.
 2. Stopping is automatic; restarting is not. Limits and kill switches may halt things on their own.
    Resuming always needs the owner.
-3. Never write payment details, API keys, passwords or other credentials into any file you create. If a
-   placeholder asks for one, leave it empty and add an owner action item instead.
+3. Never write payment details, API keys, passwords or other credentials into any file you create, the
+   answers file included. The Telegram token and chat id go into the installed service definition, by the
+   owner; the installer already queued that as an owner action.
 4. The registry stays `permissions_status: proposed` until the owner changes it to `confirmed`.
 5. With the runner, never pass `--permission-mode` and never use `--continue`.
+6. A protected zone is never decided by you. `no_protected_zone: true` only when the owner said, in their
+   own words, that nothing in that project moves money or controls a live service. Quote them in your report.
 
-## Step 1 — Get the templates
+## Step 1 — Get the installer
 
-Installing this skill copies only this file. The templates live in the source repository.
+Installing this skill copies only this file. The installer and templates live in the source repository.
 
-- If the working directory already contains `templates/CLAUDE.md.ceo`, use that copy.
+- If the working directory already contains `scripts/install.py` and `templates/`, use that copy.
 - Otherwise clone it: `git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os <temp dir>`,
   and tell the owner which commit you used.
+- The destination is the owner's CEO project folder (`--dest`). Ask before using a folder that already has a
+  `CLAUDE.md`; the installer keeps existing files unless `--force`, and keeps a `.bak-<time>` copy when it replaces one.
+- PyYAML is the only dependency. If `python3 -c "import yaml"` fails, tell the owner and run
+  `python3 -m pip install --user pyyaml` (macOS has no `pip` command; inside a virtual environment drop `--user`).
 
-Copy into the owner's CEO project root. Ask before overwriting any existing file.
+## Step 2 — Ask the owner, in one message
 
-| Source | Destination |
-|---|---|
-| `templates/CLAUDE.md.ceo` | `CLAUDE.md` |
-| `templates/agents/*.md` | `.claude/agents/` |
-| `templates/owner_action_queue.yaml` | `config/owner_action_queue.yaml` |
-| `templates/logic_agents.yaml` | `config/logic_agents.yaml` |
-| `scripts/logic_agent.py` | `scripts/logic_agent.py` |
-| `tests/test_logic_agent.py` | `tests/test_logic_agent.py` |
+Ask these questions together and wait for the answers. Do not guess an answer; offer the default in brackets.
 
-Keep `docs/00`–`05` as reference for yourself; do not paste them into `CLAUDE.md`.
+1. Company name, and one line on what it does.
+2. The owner's name.
+3. Report language [English]; time zone [the system's, e.g. Asia/Seoul]; report times [08:00, 20:00].
+4. Messenger: `telegram`, or `none` for now (reports only printed and saved).
+5. Roles to install [cto, cro, cfo, cmo].
+6. Projects the CEO should manage: for each one a short name (letters, digits, `_`, `-`), one line, its folder,
+   how the owner works with it (`headless` = the CEO calls it, `live` = the owner's own daily terminal,
+   `in_session` = a helper inside the CEO session), and its handoff file [HANDOFF.md].
+7. **For each project: its protected zone** — the files or folders that move real money or control live services
+   (payments, pricing, live trading, send jobs, service controls). Paths relative to the project folder, `~`, or absolute.
+   If the owner says there are none, ask them to confirm it in their own words.
+8. Optional: live services agents must never start, stop or restart; data sources per metric (name = path or API);
+   the owner's own sentence on what the CEO may do without asking.
 
-## Step 2 — Fill the `{{...}}` placeholders
+## Step 3 — Run the installer
 
-Ask the owner these questions in one message, then fill every placeholder:
+Write the answers to a YAML file **outside** the CEO folder (a temp dir; it contains no secrets). The schema is in
+the docstring of `scripts/install.py`; minimal example:
 
-1. Company name and one line on what it does (`{{COMPANY}}`).
-2. The owner's name or handle (`{{OWNER_NAME}}`).
-3. Units or projects: name, one line each, local path (`{{unit_a}}`, `{{unit_b}}` and their paths).
-   Which of them may the CEO only read?
-4. Critical zone: which files, configs and service controls move real money or control live
-   services? (`{{path/to/live_execution/**}}`, `{{path/to/risk_limits_config/**}}`, service control.)
-5. Data sources the CEO should read for each metric (`{{metric_a}}`: path or API).
-6. Report language (`{{LANGUAGE}}`) and where the access-control file lives.
-7. Which roles to keep (CTO, CRO, CFO, CMO) and which to add.
-8. Project agents for the registry: name, directory, `mode` (`headless` / `live` / `in_session`),
-   handoff file.
+```yaml
+company: "Saebyeok Data Lab"
+owner: "Mina Seo"
+timezone: "Asia/Seoul"
+report_times: ["08:00", "20:00"]
+messenger: telegram
+projects:
+  - name: newsletter
+    description: "paid newsletter"
+    path: "~/projects/newsletter"
+    mode: headless
+    handoff: HANDOFF.md
+    protected: ["billing/**", "config/pricing.yaml"]
+```
 
-Do not guess an answer. Anything the owner leaves open becomes an owner action item with
-`action: facts`. When done, `grep -rn "{{" CLAUDE.md .claude/agents config` must return nothing
-except items you have listed as open.
+```bash
+python3 <clone>/scripts/install.py --answers <answers.yaml> --dest <CEO folder>
+```
 
-## Step 3 — Owner action queue
+Show the owner the `== doctor ==` lines and the `== install summary ==` **verbatim**, including any
+`NO PROTECTED ZONE` box. The install is done only when the summary says `STATUS: COMPLETE` (exit code 0).
+If it says `NOT COMPLETE`, each listed line is the fix: ask the owner for the missing fact, update the answers
+file, run the installer again (`--force` only for files the owner agreed to replace). Never edit a placeholder
+away by hand to make the check pass.
+
+## Step 4 — First checks with the owner
+
+Run from the CEO folder and show the output:
+
+```bash
+python3 scripts/report_daemon.py --once --dry-run          # the report the owner would receive; nothing is sent
+python3 scripts/logic_agent.py --status
+python3 scripts/logic_agent.py <agent> -p "Read your handoff and report status in 5 lines" --dry-run
+```
+
+In the dry run, point at `--disallowedTools`: it must list the owner's real protected paths as `Edit(//absolute/...)`.
+Drop `--dry-run` only after the owner has seen it. Tell the owner: until they confirm the allowlist, each project
+agent has only the tools of its own `.claude/settings*.json`, so expect "Needed permission: …" at the end of its
+first report. The remaining owner steps (Telegram bot, service registration, allowlist review) are already in
+`config/owner_action_queue.yaml` with their commands; point to README section 3 for the service.
+
+## Owner action queue (ongoing)
 
 - Queue only what physically needs the owner's hands: sending or posting outside the company,
   payments, accounts and authentication (OAuth consent, logins, transfers), signatures and contracts,
@@ -74,38 +114,31 @@ except items you have listed as open.
 - Before reporting an item as still pending, check its real state. When the owner confirms, set
   `status: done` and `done_at`.
 
-## Step 4 — Registry and permissions
+## Registry and permissions (ongoing)
 
 - Leave `permissions_status: proposed`. The runner passes `allowed_tools` only when the owner has set
-  `confirmed` and recorded date, quote and scope under `permissions_confirmed`. `denied_tools` are
-  always passed.
-- List every critical-zone path in that agent's `denied_tools` and in the charter's critical zone.
+  `confirmed` and recorded date, quote and scope under `permissions_confirmed`. `denied_tools` are always passed.
+- Path rules: `Edit(//abs/path/**)` (two slashes = absolute; one slash is relative to the settings source).
+  Use `Edit`, not `Write`: Claude Code never consults `Write(path)` rules. The runner refuses real calls while a
+  denied rule is still a placeholder.
 - Tell the owner that denylist patterns are best effort. The real guarantees are the allowlist, each
   project's own `CLAUDE.md` rules, and reviewing git history.
 - Never run headless calls against a directory where a live session is open.
 
-## Step 5 — First checks
-
-```bash
-pip install pyyaml
-python3 scripts/logic_agent.py --status
-python3 scripts/logic_agent.py <agent> -p "Read your handoff and report status in 5 lines" --dry-run
-python3 -m pytest tests -q
-```
-
-Show the owner the dry-run command and preamble. Drop `--dry-run` only after that.
-
 ## Reviewing an existing setup
 
-Report each item as pass, fail or not checked:
+Run `python3 scripts/doctor.py` in the CEO folder and show its output verbatim. Then report each item as pass,
+fail or not checked:
 
-- every critical-zone path is in the charter and in the relevant `denied_tools`;
+- doctor has no ✗ line;
+- every critical-zone path is in the charter, in the relevant `denied_tools`, and in `.claude/settings.json` deny;
 - `permissions_status` is `proposed`, or `confirmed` with the owner's quote, date and scope;
-- every open owner item is `ready: true` with `prep` paths that exist;
+- every open owner item is `ready: true` with `prep` that a person who has not read the conversation can follow;
 - no credentials in tracked files (search for keys, tokens and passwords);
 - approvals relayed to project agents quote the owner's own words with a timestamp;
 - nothing that moves money or cannot be undone runs without the owner.
 
 ## Report back
 
-In a few lines: files installed, placeholders filled and still open, queue items added, check results.
+In a few lines: the commit used, `STATUS` and the doctor counts, projects with their protected paths (and any
+NO PROTECTED ZONE, with the owner's quote), owner actions now in the queue, what is still open.

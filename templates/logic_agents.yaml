@@ -23,6 +23,17 @@
 #     (2) the agent's own CLAUDE.md rules, (3) reviewing git history.
 #   - Extra per-call allows (--allowed-tools) are a CEO decision per call and are logged.
 #
+# Path rules (Claude Code permission syntax):
+#   Edit(//Users/me/shop/billing/**)   two slashes = absolute path from the filesystem root
+#   Edit(~/shop/billing/**)            from your home directory
+#   Edit(/billing/**)                  ONE slash is NOT absolute: it is relative to the settings source
+#   Edit(billing/**)                   relative to the agent's working directory
+#   Use Edit(...) for "may not change": it covers every built-in tool that writes files (Write too) and
+#   shell writes Claude Code recognises (sed -i, tee, > file). Claude Code never consults Write(path) rules.
+#   Each agent needs a protected-zone decision: its critical-zone paths in denied_tools, or
+#   `protected_zone: none` when the owner confirmed it has none. The placeholder paths below in capitals
+#   protect nothing: the runner refuses a call while one is left, and scripts/doctor.py fails.
+#
 # mode:
 #   headless   = called by the CEO agent. Never open a live session in the same directory
 #                at the same time (one transcript, two processes). A file lock enforces it
@@ -84,18 +95,15 @@ agents:
   strategy_a:
     path: ~/projects/strategy_a          # absolute, ~, or relative to this project root
     role: "research and pilot runs for unit A"
-    handoff: docs/SESSION_HANDOFF.md
+    handoff: docs/SESSION_HANDOFF.md     # relative to path; must exist there
     mode: headless
     notes: "anything the CEO must remember when calling this agent"
     allowed_tools:
       - "Edit(//ABSOLUTE/PATH/TO/strategy_a/**)"
-      - "Write(//ABSOLUTE/PATH/TO/strategy_a/**)"
       - "Bash(python3 research/*)"
     denied_tools:                        # critical zone: files that move real money or control live services
       - "Edit(//ABSOLUTE/PATH/TO/strategy_a/live/**)"
-      - "Write(//ABSOLUTE/PATH/TO/strategy_a/live/**)"
       - "Edit(//ABSOLUTE/PATH/TO/strategy_a/config/**)"
-      - "Write(//ABSOLUTE/PATH/TO/strategy_a/config/**)"
 
   ops_bot:
     path: ~/projects/ops_bot
@@ -104,7 +112,7 @@ agents:
     mode: headless
     allowed_tools:
       - "Edit(//ABSOLUTE/PATH/TO/ops_bot/**)"
-      - "Write(//ABSOLUTE/PATH/TO/ops_bot/**)"
+    protected_zone: none                 # the owner confirmed: nothing here moves money or controls a live service
     denied_tools: []
 
   daily_desk:

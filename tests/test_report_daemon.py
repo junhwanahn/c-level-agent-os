@@ -10,6 +10,8 @@ split by UTF-16 length, never truncated | Telegram secrets from the environment 
 and records nothing | sleep/wake catch-up through the loop.
 
 Run: python3 -m pytest tests -q   (or: python3 -m unittest discover tests)
+Works in the template repository and in an installed CEO project (scripts/install.py copies this file);
+the template-only checks are skipped where templates/ and docs/ are absent.
 Fake clock, stub runner (the real `claude` is never invoked), stub HTTP (nothing is sent to Telegram).
 One test runs a stub shell script to check that a timeout kills the child.
 """
@@ -33,6 +35,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+# template repository: templates/report_prompt.md; installed CEO project: config/report_prompt.md
+PROMPT = next((p for p in (ROOT / "templates" / "report_prompt.md", ROOT / "config" / "report_prompt.md")
+               if p.is_file()), ROOT / "templates" / "report_prompt.md")
+HAS_TEMPLATES = (ROOT / "templates" / "owner_action_queue.yaml").is_file() and (ROOT / "docs").is_dir()
 
 import report_daemon as rd  # noqa: E402
 
@@ -115,7 +121,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp()).resolve()  # macOS: /var -> /private/var
         (self.tmp / "config").mkdir()
-        shutil.copy(ROOT / "templates" / "report_prompt.md", self.tmp / "config" / "report_prompt.md")
+        shutil.copy(PROMPT, self.tmp / "config" / "report_prompt.md")
         self.queue(BASE_QUEUE)
         self.env = mock.patch.dict(os.environ, ENV)
         self.env.start()
@@ -158,8 +164,9 @@ class Base(unittest.TestCase):
 
 # ---------------------------------------------------------------- top block (docs/03)
 class TopBlock(unittest.TestCase):
+    @unittest.skipUnless(HAS_TEMPLATES, "template repository only")
     def test_template_queue_renders_docs_example(self):
-        items, warn = rd.load_queue(ROOT / "templates" / "owner_action_queue.yaml")
+        items, warn = rd.load_queue(ROOT / "templates" / "owner_action_queue.yaml", examples=True)
         self.assertIsNone(warn)
         doc = (ROOT / "docs" / "03-owner-action-queue.md").read_text()
         example = doc.split("## Example output", 1)[1].split("```")[1].strip("\n")
@@ -217,6 +224,17 @@ class Parsing(unittest.TestCase):
         self.assertEqual(items[0]["due"], "2026-01-15")
         self.assertIn("no timezone", rd.parse_trigger_at(items[0]["trigger_at"])[1])
         self.assertIsNone(rd.parse_trigger_at(items[1]["trigger_at"])[1])
+        shutil.rmtree(tmp)
+
+    def test_example_items_are_ignored(self):
+        tmp = Path(tempfile.mkdtemp())
+        p = tmp / "q.yaml"
+        p.write_text("- id: ex\n  example: true\n  owner: human\n  status: open\n  ready: true\n  due: '2026-01-01'\n"
+                     "- id: real\n  owner: human\n  status: open\n  ready: true\n  due: '2026-01-02'\n")
+        self.assertEqual([i["id"] for i in rd.load_queue(p)[0]], ["real"])
+        self.assertEqual([i["id"] for i in rd.load_queue(p, examples=True)[0]], ["ex", "real"])
+        if HAS_TEMPLATES:  # the template's examples never reach a report
+            self.assertEqual(rd.load_queue(ROOT / "templates" / "owner_action_queue.yaml")[0], [])
         shutil.rmtree(tmp)
 
     def test_broken_queue_gives_warning_not_exception(self):
@@ -632,6 +650,27 @@ class Delivery(Base):
         self.assertIn("telegram not configured", err)
         self.assertEqual(self.http.posts, [])
         self.assertIn("report body", self.out.getvalue())
+
+    def test_delivery_none_prints_and_saves_without_telegram(self):
+        d = self.daemon(self.cfg(delivery="none"))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(d.run_report(None, "manual"))
+            res = rd.check_config(self.tmp / "config" / "report_daemon.yaml")
+        self.assertEqual(self.http.posts, [])
+        self.assertIn("> Owner actions 1", self.out.getvalue())
+        self.assertTrue(list((self.tmp / "state" / "report_daemon" / "reports").glob("manual_*.md")))
+        self.assertTrue(any(lv == "warn" and "delivery: none" in m for lv, m in res))
+        self.assertFalse(any("REPORT_TELEGRAM_TOKEN" in m for _, m in res))
+        with self.assertRaises(rd.ConfigError):
+            self.cfg(delivery="email")
+
+    def test_missing_env_is_a_warning_for_doctor(self):
+        self.cfg(claude_cmd=sys.executable)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            strict = rd.check_config(self.tmp / "config" / "report_daemon.yaml")
+            lenient = rd.check_config(self.tmp / "config" / "report_daemon.yaml", env_required=False)
+        self.assertTrue(any(lv == "error" and "REPORT_TELEGRAM_TOKEN" in m for lv, m in strict))
+        self.assertTrue(any(lv == "warn" and "REPORT_TELEGRAM_TOKEN" in m for lv, m in lenient))
 
     def test_dry_run_once_sends_and_records_nothing(self):
         d = self.daemon(dry_run=True)

@@ -47,6 +47,7 @@ report_tools: false               # tools off for the report call; the inputs ar
 logic_agent_script: scripts/logic_agent.py   # trigger_agent items run through it (docs/04)
 agent_timeout_s: 3600             # outer limit for a trigger_agent run; the registry's timeout_sec applies inside
 
+delivery: telegram               # telegram | none (none = reports are only printed and saved under log_dir/reports/)
 telegram:
   token_env: REPORT_TELEGRAM_TOKEN      # NAME of the env var holding the bot token (from @BotFather)
   chat_id_env: REPORT_TELEGRAM_CHAT_ID  # NAME of the env var holding the chat id

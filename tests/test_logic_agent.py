@@ -1,6 +1,7 @@
 """Regression tests for scripts/logic_agent.py.
 
 Pinned behaviour: mode refusal | allowlist only when confirmed, denylist always |
+a placeholder denied rule refuses real calls and is listed by --dry-run (with a missing handoff) |
 never --permission-mode / --continue | --no-tools passes --tools "" | session resume and rotation |
 fresh retry when the resumed session is gone | session and call records.
 
@@ -86,6 +87,24 @@ class ResolveAndCommand(unittest.TestCase):
         self.assertEqual(cmd2[cmd2.index("--allowedTools") + 1], "Bash(python3 *)")
         self.assertIn("H.md", cmd2[cmd2.index("--append-system-prompt") + 1])
         self.assertIn("rotated", la.build_preamble(spec, rotated=True))
+
+    def test_placeholder_denied_rule_refuses_real_call_and_warns_in_dry_run(self):
+        reg = yaml.safe_load(_registry(self.tmp).read_text())
+        reg["agents"]["strategy_a"]["denied_tools"] = ["Edit(//ABSOLUTE/PATH/TO/strategy_a/live/**)",
+                                                       "Write(//x/critical/**)"]
+        p = self.tmp / "reg_placeholder.yaml"
+        p.write_text(yaml.safe_dump(reg))
+        with self.assertRaises(la.LogicAgentError) as e:
+            la.call("strategy_a", "hi", registry=p, claude_cmd="/bin/false")
+        self.assertIn("not protected", str(e.exception))
+        r = la.call("strategy_a", "hi", registry=p, dry_run=True)
+        text = "\n".join(r["warnings"])
+        self.assertIn("placeholder and protects nothing", text)
+        self.assertIn("never consults Write(//x/critical/**)", text)
+        self.assertIn("handoff file not found", text)
+        (self.tmp / "proj_a" / "H.md").write_text("handoff")
+        clean = la.call("strategy_a", "hi", registry=_registry(self.tmp), dry_run=True)
+        self.assertEqual(clean["warnings"], [])
 
     def test_no_tools_flag(self):
         spec = la.resolve("strategy_a", la.load_registry(_registry(self.tmp)))

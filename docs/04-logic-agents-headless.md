@@ -45,6 +45,15 @@ instead of a live terminal per project plus messages between sessions, the CEO a
 4. **The denylist is best effort.** Rules are string patterns and can be bypassed (`git -C`, `find -exec`,
    writing through `python3`). Real guarantees: the allowlist, the agent's own `CLAUDE.md` rules, and git history review.
 5. **Per-call extras are logged.** `--allowed-tools` adds a rule for one call and is recorded in the call log.
+6. **Path syntax.** `Edit(//Users/me/shop/billing/**)`: two slashes = absolute path from the filesystem root;
+   `~/path` = from your home; a single leading slash (`/billing/**`) is *not* absolute, it is relative to the
+   settings source; no slash = relative to the working directory. Use `Edit(...)` for "may not change": it covers
+   every built-in tool that writes files and the shell writes Claude Code recognises; `Write(path)` rules are
+   accepted but never consulted. `scripts/install.py` writes every protected path in this form, for the agent and for
+   the CEO session (`.claude/settings.json`), and `scripts/doctor.py` fails on a relative or placeholder denied rule.
+7. **Every agent has a protected-zone decision.** Its critical-zone paths in `denied_tools`, or `protected_zone: none`
+   when the owner confirmed it has none (the installer shows that in a box). A template placeholder
+   (`//ABSOLUTE/PATH/TO/...`) protects nothing: the runner refuses real calls while one is left in `denied_tools`.
 
 ## Session continuity and rotation
 
@@ -74,8 +83,11 @@ External publication, critical-zone edits and irreversible actions always do.
 - Strips `CLAUDECODE` / `CLAUDE_CODE_*` from the child environment so a call from inside a session is not blocked as nested.
 - Starts the child in its own process group; on timeout it kills the whole group (ssh, node children) and returns rc 124.
 - Appends one JSON line per call to `state/logic_agent_calls.jsonl`: agent, model, session reason, cost, duration, errors.
-- `--dry-run` prints the exact command and preamble. `--status` lists sessions and transcript sizes.
+- `--dry-run` prints the exact command and preamble, then a `WARNING:` line for a placeholder rule, a missing handoff
+  file or an ignored `Write(path)` rule, and a note while the allowlist is not confirmed. `--status` lists sessions and
+  transcript sizes.
 - `--no-tools` passes `--tools ""` (no tools at all). The reporting daemon uses it for `trigger_agent` runs
   unless the queue item sets `trigger_tools: true` ([05](05-reporting-daemon.md)).
 
-Check flag names against `claude --help` for your CLI version before the first real call.
+Check flag names against `claude --help` for your CLI version before the first real call; `scripts/doctor.py`
+does it for every flag the runner and the daemon pass.
