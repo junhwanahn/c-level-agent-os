@@ -33,6 +33,10 @@
 #   Each agent needs a protected-zone decision: its critical-zone paths in denied_tools, or
 #   `protected_zone: none` when the owner confirmed it has none. The placeholder paths below in capitals
 #   protect nothing: the runner refuses a call while one is left, and scripts/doctor.py fails.
+#   A denied path that does not exist makes scripts/doctor.py fail (usually a typo that leaves the real folder
+#   unprotected), unless the agent lists that rule under `allow_missing:` because the owner said it comes later.
+#   Live services: install.py adds Bash(launchctl *<name>*) and Bash(systemctl *<name>*) per live service
+#   to defaults.denied_tools (and to the CEO session's .claude/settings.json).
 #
 # mode:
 #   headless   = called by the CEO agent. Never open a live session in the same directory

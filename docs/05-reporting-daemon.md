@@ -66,8 +66,8 @@ How the notes above map to the daemon:
 | Size limits | split into chunks of at most `max_chunk` UTF-16 units, labelled `(1/3)`; nothing is cut |
 
 Requirements: Python 3.9+ with PyYAML, the Claude Code CLI logged in for the user the service runs as,
-a Telegram bot (or `delivery: none` to start with printed and saved reports only). Run every command from the
-CEO project root.
+a Telegram bot (or `delivery: none`, the installer's default, to start with printed and saved reports only). Run
+every command from the CEO project root.
 
 `scripts/install.py` does step 1 from your answers (time zone, report times, the absolute `claude_cmd`, delivery),
 renders the service file of step 4 into `service/` with your paths, PATH and python filled in, prints the exact
@@ -126,7 +126,10 @@ Operating notes:
 - On first start, earlier report slots are not reported as missed; scheduled items already past their catch-up
   window are (once). Template examples (`example: true`) are ignored; delete them anyway (`scripts/doctor.py` fails
   while one is left).
-- `delivery: none` prints each report and keeps the full text under `state/report_daemon/reports/`; nothing is sent.
+- Every report's full text is kept under `state/report_daemon/reports/`. `delivery: none` prints it and sends nothing.
+- A Telegram value that is still a template placeholder (`REPLACE_WITH_...`, `PASTE_...`) is never sent: the report
+  is logged as not delivered with that reason. `scripts/doctor.py` checks the values in the registered service
+  definition (the plist's `EnvironmentVariables`, or the systemd `EnvironmentFile`), not in your shell.
 - One process, no threads: a long trigger run blocks the loop. A report or trigger that comes due meanwhile is
   run afterwards with the delay labelled (`daemon busy with trigger x`), not marked missed.
 - `trigger_agent` runs `python3 scripts/logic_agent.py <name> --json` (plus `--no-tools` unless `trigger_tools: true`)

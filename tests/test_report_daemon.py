@@ -140,7 +140,7 @@ class Base(unittest.TestCase):
 
     def cfg(self, **over) -> dict:
         c = {"timezone": "Asia/Seoul", "report_times": ["08:00", "20:00"], "project_dir": str(self.tmp),
-             "claude_cmd": "claude", "retry_delay_seconds": 30, **over}
+             "claude_cmd": "claude", "retry_delay_seconds": 30, "delivery": "telegram", **over}
         p = self.tmp / "config" / "report_daemon.yaml"
         p.write_text(yaml.safe_dump(c))
         return rd.load_config(p)
@@ -651,6 +651,35 @@ class Delivery(Base):
         self.assertEqual(self.http.posts, [])
         self.assertIn("report body", self.out.getvalue())
 
+    def test_placeholder_values_are_never_sent(self):
+        """B-3: a registered copy with REPLACE_WITH_... (or the Linux PASTE_... line) left: no send, logged, saved."""
+        for env in ({"REPORT_TELEGRAM_TOKEN": "REPLACE_WITH_BOT_TOKEN", "REPORT_TELEGRAM_CHAT_ID": "REPLACE_WITH_CHAT_ID"},
+                    {"REPORT_TELEGRAM_TOKEN": "PASTE_TOKEN", "REPORT_TELEGRAM_CHAT_ID": "42"}):
+            self.http = Http()
+            d = self.daemon()
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertFalse(d.run_report(None, "manual"))
+                strict = rd.check_config(self.tmp / "config" / "report_daemon.yaml")
+            self.assertEqual(self.http.posts, [])
+            row = self.rows("reports.jsonl")[-1]
+            self.assertEqual(row["event"], "send_failed")
+            self.assertIn("still the placeholders", row["error"])
+            self.assertIn("still the placeholders", (self.tmp / "state" / "report_daemon" / "daemon.log").read_text())
+            self.assertTrue(list((self.tmp / "state" / "report_daemon" / "reports").glob("manual_*.md")))
+            self.assertTrue(any(lv == "error" and "still the placeholders" in m for lv, m in strict))
+
+    def test_doctor_mode_skips_this_shells_telegram_variables(self):
+        self.cfg(claude_cmd=sys.executable)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            rows = rd.check_config(self.tmp / "config" / "report_daemon.yaml", env_required=False, telegram_env=False)
+        self.assertFalse(any("REPORT_TELEGRAM_TOKEN" in m for _, m in rows))
+        self.assertTrue(any(lv == "ok" and "also saved under" in m for lv, m in rows))
+
+    def test_default_delivery_is_none(self):
+        p = self.tmp / "config" / "report_daemon.yaml"
+        p.write_text(yaml.safe_dump({"timezone": "UTC", "report_times": ["08:00"], "project_dir": str(self.tmp)}))
+        self.assertEqual(rd.load_config(p)["delivery"], "none")
+
     def test_delivery_none_prints_and_saves_without_telegram(self):
         d = self.daemon(self.cfg(delivery="none"))
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -659,7 +688,7 @@ class Delivery(Base):
         self.assertEqual(self.http.posts, [])
         self.assertIn("> Owner actions 1", self.out.getvalue())
         self.assertTrue(list((self.tmp / "state" / "report_daemon" / "reports").glob("manual_*.md")))
-        self.assertTrue(any(lv == "warn" and "delivery: none" in m for lv, m in res))
+        self.assertTrue(any(lv == "info" and "delivery: none" in m for lv, m in res))
         self.assertFalse(any("REPORT_TELEGRAM_TOKEN" in m for _, m in res))
         with self.assertRaises(rd.ConfigError):
             self.cfg(delivery="email")

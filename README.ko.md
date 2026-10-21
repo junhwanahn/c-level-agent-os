@@ -48,7 +48,8 @@ Nothing outside the queue needs you. Next CEO step: the weekly review tomorrow m
 - 나머지는 CEO 에이전트가 결정·집행하고 두 번째 블록에 보고한다. 모든 입력에는 경과 시간이 붙는다.
 - 첫날에는 설치기가 큐에 넣은 설정 단계만 보인다. `cto 5h` 같은 입력 줄은 `config/report_daemon.yaml` 의 `inputs:` 에
   에이전트 상태 파일을 적은 뒤부터 나온다.
-- 보고 받는 곳이 `none` 이면 아무것도 발송하지 않고, 보고마다 `state/report_daemon/reports/` 아래 파일로 저장한다.
+- 보고는 받는 곳과 무관하게 언제나 `state/report_daemon/reports/` 아래 파일로도 저장된다. 받는 곳이 `none`(기본값)이면
+  아무것도 발송하지 않고 그 파일이 곧 보고다. `telegram` 이면 다시 읽을 수 있는 사본이다.
 - 보고는 이 컴퓨터가 만든다. 보고 시각에 컴퓨터가 켜져 있고 잠자기 상태가 아니어야 한다(2절 용어 상자).
 
 ## 2. 빠른 시작(코딩 불필요)
@@ -64,13 +65,19 @@ python3 scripts/install.py
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
+이 네 줄만으로는 내일 아침 보고가 오지 않는다. 보고는 서비스가 만들므로 3절(서비스 등록)까지 마친다.
+
 1. **받기.** 템플릿을 새 폴더 `my-company` 로 받는다. 이 폴더가 회사의 CEO 폴더가 된다.
    git 이 없으면 GitHub 에서 ZIP 을 받아 풀고, 그 폴더에서 터미널을 연다(아래 용어 상자).
 2. **설치.** 질문 12개(프로젝트 폴더를 추가하면 하나당 7개 더), 약 3분. 모든 질문에 [대괄호] 기본값이 있거나 Enter 가
    무엇을 하는지 적혀 있어서, 끝까지 Enter 만 눌러도 설치가 끝난다(프로젝트 폴더 없이 설치되고, 설치기를 다시 실행해
    나중에 추가할 수 있다). 언제든 Ctrl+C 로 멈출 수 있고, 마지막 질문 전에는 설치 파일을 하나도 쓰지 않는다. 유일한 의존성
-   PyYAML 이 없으면 설치를 제안한다. 마지막에 점검을 돌리고 한 줄로 끝난다: `STATUS: COMPLETE`, 또는 고칠 항목을 나열한
-   `NOT COMPLETE`. 요약은 실제로 쓴 파일을 다시 읽어 보여주고, 3절의 서비스 등록 명령을 이 컴퓨터의 경로로 채워 출력한다.
+   PyYAML 이 없으면 설치를 제안한다. *보고를 어디로 받을까?* 에서 Enter 를 누르면 기본값 `none` 이다: 보고가 파일로 저장되고
+   봇 토큰이 필요 없다. 텔레그램으로 받으려면 거기서 `telegram` 이라고 답하거나 나중에
+   `python3 scripts/install.py --reconfigure delivery` 를 실행한다. 마지막에 점검을 돌리고 한 줄로 끝난다:
+   `STATUS: COMPLETE`, 또는 고칠 항목을 나열한 `NOT COMPLETE`. 요약은 실제로 쓴 파일을 다시 읽어 보여주고, 3절의 서비스
+   등록 명령을 이 컴퓨터의 경로로 채워 언제나 출력한다. `NOT COMPLETE` 여도 출력한다(먼저 나열된 항목을 고친다. 서비스
+   등록은 지금 해도 된다).
 3. **내일 아침 보고를 지금 보기.** 받게 될 보고를 화면에 출력한다(모델 호출 1회, 발송·기록 없음).
    `--no-model` 을 붙이면 상단 블록만 본다. `Not logged in` 이 나오면 `claude` 를 입력하고 `/login` 을 한 뒤 다시 실행한다.
 
@@ -79,15 +86,22 @@ python3 scripts/report_daemon.py --once --dry-run
 `python3 scripts/install.py --reconfigure delivery`, 타임존이나 보고 시각만 바꾸려면 `python3 scripts/install.py --reconfigure schedule`.
 
 **보호 구역.** 설치기는 프로젝트마다 실제 돈이 움직이거나 라이브 서비스를 제어하는 파일·폴더(결제·가격·실거래·발송 작업 등)를
-묻는다. 입력한 경로는 그 프로젝트 에이전트와 CEO 세션 양쪽의 절대경로 거부 규칙이 된다. 없는 경로는 확인하지 않으면 넣지 않는다
-(오타가 나면 진짜 폴더가 보호되지 않기 때문이다). 비워 두려면 `none` 을 직접 입력해 확인해야 하고, 설치 요약에
-**NO PROTECTED ZONE** 이 상자로 크게 표시된다. 템플릿 자리표시자가 하나라도 남으면 설치는 완료가 아니다.
+묻는다. 입력한 경로는 그 프로젝트 에이전트와 CEO 세션 양쪽의 절대경로 거부 규칙이 된다. 없는 경로는 확인하지 않으면 넣지 않고
+(오타가 나면 진짜 폴더가 보호되지 않기 때문이다), 확인하지 않은 없는 보호 경로가 있으면 점검(doctor)이 실패한다. 프로젝트의
+보호 구역을 비워 두려면 `none` 을 직접 입력해 확인해야 하고, 설치 요약에 **NO PROTECTED ZONE** 이 상자로 크게 표시된다.
+프로젝트가 하나도 없으면 아직 보호할 것이 없으므로 이 단계는 한 줄 안내와 함께 건너뛰고, 프로젝트를 추가할 때 묻는다.
+입력한 라이브 서비스 이름은 그 이름이 든 `launchctl`·`systemctl` 명령의 거부 규칙이 된다. 템플릿 자리표시자가 하나라도 남으면
+설치는 완료가 아니다.
+
+**질문 없이 설치.** `python3 scripts/install.py --answers answers.yaml` 은 답을 파일에서 읽는다. 형식은 설치할 때마다 생기는
+`config/install_answers.yaml` 과 같다(`python3 scripts/install.py --help` 에 전체 예시가 있다). `--answers` 는 `allow_missing` 에
+적은 경로만 확인한 것으로 본다. 그 밖의 보호 경로가 하나라도 없으면 파일을 하나도 쓰지 않고 멈춘다.
 
 그다음 이 폴더에서 Claude Code 를 연다: `claude` 를 입력하고 Enter, 이어서 `recap` 을 입력한다(예: "recap 해 줘").
 이제부터 할 일 목록은 `config/owner_action_queue.yaml` 이다(`open -e config/owner_action_queue.yaml` 로 연다). 남은 설정 단계는
 설치기가 이미 거기에 올려 두었다. 하나를 끝내면 Claude Code 에서 CEO 에게 알린다(예: "서비스 등록 끝났어"). CEO 가
 `status: done` 과 `done_at` 을 기록한다.
-언제든 `python3 scripts/doctor.py` 로 설치 상태를 다시 점검한다(✓ 정상, ⚠ 읽어 볼 것, ✗ 고칠 것). 모델을 부르지 않고 Claude Code
+언제든 `python3 scripts/doctor.py` 로 설치 상태를 다시 점검한다(✓ 정상, ℹ 참고, ⚠ 읽어 볼 것, ✗ 고칠 것). 모델을 부르지 않고 Claude Code
 로그인 여부까지 확인한다. `python3 scripts/doctor.py --check-login` 은 동의를 받은 뒤 Claude 에게 짧은 시험 메시지를 하나 보낸다.
 
 - **프로젝트 에이전트는 도구가 적은 상태로 시작한다.** 제안된 허용 목록을 확정하기 전에는 각 에이전트가 자기 폴더의
@@ -130,7 +144,7 @@ python3 scripts/report_daemon.py --once --dry-run
 ## 3. 서비스 등록(보고가 스스로 오게)
 
 설치기는 경로를 채운 서비스 파일을 `service/` 폴더에 써 두었고, 설치 요약 끝의 *2. 보고 서비스 등록* 아래에 이 컴퓨터용 명령을
-그대로 출력했다. **그 줄들을 터미널에 그대로 붙여넣는다.** 큐의 대표 액션 `register_report_service_…` 에도 같은 명령이 들어 있다.
+그대로 출력했다(STATUS 줄과 무관하게). **그 줄들을 터미널에 그대로 붙여넣는다.** 큐의 대표 액션 `register_report_service_…` 에도 같은 명령이 들어 있다.
 다시 출력하려면 `python3 scripts/install.py --render-service`.
 
 붙여넣을 내용은 보고 받는 곳에 따라 다르다.
@@ -141,6 +155,8 @@ python3 scripts/report_daemon.py --once --dry-run
 - **`telegram`:** 앞의 줄들이 서비스 파일을 복사하고 그 사본을 텍스트 편집기로 연다. `REPLACE_WITH_BOT_TOKEN` 과
   `REPLACE_WITH_CHAT_ID` 를 바꾸고(받는 법: 2절 용어 상자) 저장한 뒤 편집기를 닫고, 나머지 줄을 붙여넣는다. Linux 에서는
   `~/.config/report-daemon/env` 를 쓰는 줄에 `PASTE_TOKEN` 과 `PASTE_CHAT_ID` 가 있다. Enter 전에 둘 다 바꾼다.
+  `python3 scripts/doctor.py` 는 등록된 사본(또는 env 파일)의 값을 확인한다. 자리표시자가 남아 있으면 ✗ 이고, 데몬은 발송하지
+  않고 그 이유를 기록한다. 보고 본문은 그래도 `state/report_daemon/reports/` 에 저장된다.
 
 macOS 에서 성공하면 이렇게 보인다(`plutil` 은 OK, `launchctl bootstrap` 은 아무것도 출력하지 않음, 상태는 running):
 
@@ -204,9 +220,12 @@ cp "$TEMPLATE"/.gitignore .
   (예: `python3 scripts/logic_agent.py shop`). 템플릿의 `strategy_a`, `ops_bot` 은 예시다. 실제 `path`, `mode`, 그 폴더에 있는
   `handoff` 파일을 지정한다. 보호 구역: 크리티컬 존 경로를 모두 `denied_tools` 에 `Edit(//절대/경로/**)` 로 넣는다(슬래시 두 개 =
   절대경로, 한 개는 설정 위치 기준 상대경로. Claude Code 는 `Write(경로)` 규칙을 참조하지 않으므로 `Edit` 를 쓴다). 없다고 오너가
-  확인한 경우에만 `protected_zone: none`. 같은 규칙을 `.claude/settings.json` 에 `{"permissions": {"deny": [...]}}` 로 넣어 CEO 세션도 막는다.
+  확인한 경우에만 `protected_zone: none`. 아직 없는 경로는 그 에이전트의 `allow_missing:` 에도 적는다(아니면 doctor 가 실패).
+  라이브 서비스는 `defaults.denied_tools` 에 `Bash(launchctl *이름*)`·`Bash(systemctl *이름*)`. 같은 규칙을 `.claude/settings.json` 에
+  `{"permissions": {"deny": [...]}}` 로 넣어 CEO 세션도 막는다.
 - `config/owner_action_queue.yaml`: 예시 항목(`example: true`)을 지운다.
-- `config/report_daemon.yaml`: `timezone`, 따옴표 친 `report_times`, `claude_cmd` = `which claude` 출력, `delivery`.
+- `config/report_daemon.yaml`: `timezone`, 따옴표 친 `report_times`, `claude_cmd` = `which claude` 출력,
+  `delivery`(기본 `none`, 봇이 생기면 `telegram`).
 - `config/autonomy_policy.md`, `config/access_control.yaml`, `HANDOFF.md`: 날짜, 대표 본인의 말, 경로.
 
 서비스 파일을 쓰고, 점검한 뒤 첫 호출:
@@ -282,7 +301,7 @@ templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yam
 templates/service/                보고 데몬용 launchd plist, systemd user unit
 scripts/install.py                한 번에 끝나는 설치기(질문 또는 --answers 파일), --reconfigure,
                                   --render-service. 마지막에 점검
-scripts/doctor.py                 설치 점검: 줄마다 ✓ / ⚠ / ✗, ✗ 가 있으면 종료코드 1, --check-login
+scripts/doctor.py                 설치 점검: 줄마다 ✓ / ℹ / ⚠ / ✗, ✗ 가 있으면 종료코드 1, --check-login
 scripts/logic_agent.py            headless 실행기
 scripts/report_daemon.py          보고 데몬-lite: 2계층 보고, 예약 트리거, 텔레그램
 tests/                            설치기·실행기·데몬 테스트(임시 폴더, stub CLI, 실제 호출 없음)

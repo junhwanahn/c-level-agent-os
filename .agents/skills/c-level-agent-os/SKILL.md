@@ -51,30 +51,39 @@ Ask these questions together and wait for the answers. Do not guess an answer; o
 1. Company name, and one line on what it does.
 2. The owner's name.
 3. Report language [English]; time zone [the system's, e.g. Asia/Seoul]; report times [08:00, 20:00].
-4. Messenger: `telegram`, or `none` for now (reports only printed and saved).
+4. Messenger [none]: `none` (reports saved as files under `state/report_daemon/reports/`, no bot needed), or
+   `telegram` (the owner creates a bot; the token goes into the registered service definition, by the owner).
 5. Roles to install [cto, cro, cfo, cmo].
 6. Projects the CEO should manage: for each one a short name (letters, digits, `_`, `-`), one line, its folder,
    how the owner works with it (`headless` = the CEO calls it, `live` = the owner's own daily terminal,
    `in_session` = a helper inside the CEO session), and its handoff file [HANDOFF.md].
 7. **For each project: its protected zone** — the files or folders that move real money or control live services
    (payments, pricing, live trading, send jobs, service controls). Paths relative to the project folder, `~`, or absolute.
-   A path that does not exist makes the install NOT COMPLETE (usually a typo that leaves the real folder unprotected);
-   list it under `allow_missing` for that project only when the owner says it will be created later.
+   The answers file counts only the paths under `allow_missing` as checked: a path that does not exist and is not
+   listed there stops the installer before it writes any file (usually a typo that leaves the real folder
+   unprotected). List a path under `allow_missing` only when the owner said, in their own words, that it will be
+   created later (quote them); never add one to get past the stop. The doctor fails on a missing protected path
+   that is not under `allow_missing`, in every later check.
    If the owner says there are none, ask them to confirm it in their own words and write `protected: none`.
-8. Optional: live services agents must never start, stop or restart; data sources per metric (name = path or API);
-   the owner's own sentence on what the CEO may do without asking.
+   With no project at all there is nothing to ask: the installer skips the protected zone and asks when a project
+   is added.
+8. Optional: live services agents must never start, stop or restart, as launchd labels or systemd unit names
+   (comma-separated; each becomes the deny rules `Bash(launchctl *name*)` and `Bash(systemctl *name*)` for every
+   agent and the CEO session); data sources per metric (name = path or API); the owner's own sentence on what the
+   CEO may do without asking.
 
 ## Step 3 — Run the installer
 
-Write the answers to a YAML file **outside** the CEO folder (a temp dir; it contains no secrets). The schema is in
-the docstring of `scripts/install.py`; minimal example:
+Write the answers to a YAML file **outside** the CEO folder (a temp dir; it contains no secrets). The format is the
+one of `config/install_answers.yaml` (written by every install); `python3 scripts/install.py --help` prints the full
+schema. Minimal example:
 
 ```yaml
 company: "Saebyeok Data Lab"
 owner: "Mina Seo"
 timezone: "Asia/Seoul"
 report_times: ["08:00", "20:00"]
-messenger: telegram
+messenger: none
 projects:
   - name: newsletter
     description: "paid newsletter"
@@ -89,11 +98,14 @@ python3 <clone>/scripts/install.py --answers <answers.yaml> --dest <CEO folder>
 ```
 
 Show the owner the `== doctor ==` lines and the `== install summary ==` **verbatim**, including any
-`NO PROTECTED ZONE` box and the service commands under `next:` (the owner pastes those lines unchanged; never add
-`# comments` to them: an interactive zsh passes them on as arguments). The install is done only when the summary says `STATUS: COMPLETE` (exit code 0).
-If it says `NOT COMPLETE`, each listed line is the fix: ask the owner for the missing fact, update the answers
+`NO PROTECTED ZONE` box and the service commands (under `next:`, or below the `NOT COMPLETE` list: they are printed
+either way; the owner pastes those lines unchanged; never add `# comments` to them: an interactive zsh passes them on
+as arguments). The install is done only when the summary says `STATUS: COMPLETE` (exit code 0).
+If it says `NOT COMPLETE` (exit 1), each listed line is the fix: ask the owner for the missing fact, update the answers
 file, run the installer again (`--force` only for files the owner agreed to replace). Never edit a placeholder
 away by hand to make the check pass.
+If it says `STOPPED: no file was written` (exit 2), a protected path does not exist: show the owner the listed
+paths and ask whether each is a typo (fix it) or will be created later (then, with their quote, `allow_missing`).
 
 ## Step 4 — First checks with the owner
 

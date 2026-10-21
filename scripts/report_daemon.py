@@ -18,8 +18,10 @@ interactive session. Every poll (default 60 s) it does two things:
        one retry | tools off unless trigger_tools: true | trigger_agent via scripts/logic_agent.py.
 
 Delivery: Telegram Bot API, split by length (never truncated). The bot token and chat id come
-only from environment variables whose names are in the config. `delivery: none` only prints the
-report (and keeps the full text under log_dir/reports/), for trying the daemon before a bot exists.
+only from environment variables whose names are in the config (set by the service definition); a value
+that is still a template placeholder (REPLACE_WITH_..., PASTE_...) is never sent, and the log says so.
+`delivery: none` (the default) only prints the report, for running before a bot exists. Whatever the
+delivery, the full text of every report is kept under log_dir/reports/.
 Queue items marked `example: true` (the template's examples) are ignored.
 
 Usage:
@@ -64,6 +66,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 UTC = timezone.utc
 EX_CONFIG = 78  # sysexits EX_CONFIG; the systemd unit does not restart on it
 TELEGRAM_API = "https://api.telegram.org"
+# what the service templates leave for the owner to replace; a value that still contains one is never sent
+SECRET_PLACEHOLDERS = ("REPLACE_WITH_", "PASTE_TOKEN", "PASTE_CHAT_ID")
+PLACEHOLDER_NOTE = ("the Telegram values are still the placeholders (REPLACE_WITH_... / PASTE_...): not sent. Put the "
+                    "bot token and chat id into the registered service definition (python3 scripts/doctor.py checks it)")
 DEFAULTS = {
     "timezone": None,  # required
     "report_times": ["08:00", "20:00"],
@@ -86,7 +92,7 @@ DEFAULTS = {
     "report_tools": False,
     "logic_agent_script": "scripts/logic_agent.py",
     "agent_timeout_s": 3600,
-    "delivery": "telegram",
+    "delivery": "none",
     "telegram": {"token_env": "REPORT_TELEGRAM_TOKEN", "chat_id_env": "REPORT_TELEGRAM_CHAT_ID"},
     "max_chunk": 4000,
     "max_notable": 5,
@@ -185,7 +191,7 @@ def load_config(path) -> dict:
                             f"(name them in telegram.token_env / telegram.chat_id_env)")
     if not isinstance(cfg.get("claude_extra_args") or [], list):
         problems.append("claude_extra_args must be a list")
-    cfg["delivery"] = str(cfg.get("delivery") or "telegram").strip().lower()
+    cfg["delivery"] = str(cfg.get("delivery") or "none").strip().lower()
     if cfg["delivery"] not in DELIVERY:
         problems.append(f"delivery must be one of {', '.join(DELIVERY)} (got {cfg['delivery']!r})")
 
@@ -782,10 +788,15 @@ class Daemon:
         token = os.environ.get(str(tg.get("token_env") or ""), "").strip()
         chat = os.environ.get(str(tg.get("chat_id_env") or ""), "").strip()
         if not token or not chat:
-            err = f"telegram not configured: set {tg.get('token_env')} and {tg.get('chat_id_env')} in the environment"
+            err = (f"telegram not configured: {tg.get('token_env')} and {tg.get('chat_id_env')} are not set for the "
+                   f"daemon (they belong in the registered service definition)")
             self.log(f"delivery failed: {err}; message printed to stdout instead")
             print(text, file=self.out)
             return False, err, len(chunks)
+        if any(m in token or m in chat for m in SECRET_PLACEHOLDERS):
+            self.log(f"delivery failed: {PLACEHOLDER_NOTE}; message printed to stdout instead")
+            print(text, file=self.out)
+            return False, PLACEHOLDER_NOTE, len(chunks)
         ok, err, sent = telegram_send(chunks, token, chat, self.post, self.sleep)
         if not ok:
             self.log(f"delivery failed after {sent}/{len(chunks)} chunks: {err}")
@@ -1130,10 +1141,11 @@ def _registry_agents(cfg: dict) -> Optional[dict]:
         return None
 
 
-def check_config(path, env_required: bool = True) -> list:
-    """[(level, message)] with level ok | warn | error. Never prints a secret value.
-    env_required=False (used by scripts/doctor.py) reports missing Telegram variables as a warning: the
-    service reads them from its own definition, which the owner fills after install."""
+def check_config(path, env_required: bool = True, telegram_env: bool = True) -> list:
+    """[(level, message)] with level ok | info | warn | error. Never prints a secret value.
+    env_required=False reports missing Telegram variables as a warning. telegram_env=False skips the Telegram
+    variables of this environment altogether: scripts/doctor.py checks them in the registered service definition,
+    which is where the service reads them."""
     try:
         cfg = load_config(path)
     except ConfigError as e:
@@ -1201,10 +1213,15 @@ def check_config(path, env_required: bool = True) -> list:
     tg = cfg["telegram"]
     token = os.environ.get(str(tg.get("token_env") or ""), "").strip()
     chat = os.environ.get(str(tg.get("chat_id_env") or ""), "").strip()
-    if cfg["delivery"] == "none":
-        res.append(("warn", f"delivery: none - reports are printed and saved under {cfg['log_dir']}/reports/, "
+    if cfg["delivery"] == "none":  # the default, chosen on purpose: information, not a warning
+        res.append(("info", f"delivery: none - reports are printed and saved under {cfg['log_dir']}/reports/, "
                             f"not sent. To receive them by Telegram: python3 scripts/install.py --reconfigure "
                             f"delivery (or set delivery: telegram and add the variables to the service)"))
+    elif not telegram_env:
+        res.append(("ok", f"delivery: telegram (every report is also saved under {cfg['log_dir']}/reports/)"))
+    elif token and chat and any(m in token or m in chat for m in SECRET_PLACEHOLDERS):
+        res.append(("error" if env_required else "warn",
+                    f"{tg['token_env']} / {tg['chat_id_env']}: {PLACEHOLDER_NOTE}"))
     elif token and chat:
         res.append(("ok", f"telegram env {tg['token_env']} and {tg['chat_id_env']} set (values not shown)"))
         if not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", token):

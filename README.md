@@ -48,7 +48,8 @@ Nothing outside the queue needs you. Next CEO step: the weekly review tomorrow m
 - Everything else the CEO agent decides, executes and reports in the second block, with the age of every input.
 - On the first day you see only the setup steps the installer put in the queue. Input lines such as `cto 5h` appear
   once you list your agents' status files under `inputs:` in `config/report_daemon.yaml`.
-- With delivery `none` nothing is sent: each report is saved as a file under `state/report_daemon/reports/`.
+- Every report is also saved as a file under `state/report_daemon/reports/`, whatever the delivery. With delivery
+  `none` (the default) nothing is sent and that file is the report; with `telegram` it is the copy you can reread.
 - Your computer makes the report, so it must be on and awake at the report time (see the box in section 2).
 
 ## 2. Quick start (no coding)
@@ -64,15 +65,21 @@ python3 scripts/install.py
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
+These four lines do not yet bring tomorrow's report by themselves: a service makes the reports, so finish with
+section 3 (register the service).
+
 1. **Get it.** Downloads the template into a new folder `my-company`; that folder becomes your company's CEO folder.
    No git? Download the ZIP from GitHub, unzip it, then open Terminal in that folder (see the box below).
 2. **Install.** 12 questions (7 more for each project folder you add), about 3 minutes. Every question shows its
    default in [brackets] or says what Enter does, so pressing Enter all the way through works: you get an
    installation without project folders and can add them later by running the installer again. Ctrl+C stops at any
    time; no installation file is written before the last question. If PyYAML (the only dependency) is missing, it
-   offers to install it. It ends with a check and one line: `STATUS: COMPLETE`, or `NOT COMPLETE` with the exact things
-   to fix. The summary is read back from the files it wrote, and it prints the service commands for section 3 with
-   your paths filled in.
+   offers to install it. Pressing Enter at *How should reports reach you?* keeps the default `none`: reports are
+   saved as files and no bot token is needed. Answer `telegram` there (or later:
+   `python3 scripts/install.py --reconfigure delivery`) to receive them by Telegram. It ends with a check and one
+   line: `STATUS: COMPLETE`, or `NOT COMPLETE` with the exact things to fix. The summary is read back from the files
+   it wrote, and it always prints the service commands for section 3 with your paths filled in, also when it says
+   `NOT COMPLETE` (fix the listed items first; registering the service can be done right away).
 3. **See tomorrow's report now.** Prints the report you would receive (one model call; nothing is sent or recorded).
    Add `--no-model` to see only the top block. If it says `Not logged in`, type `claude`, then `/login`, and try again.
 
@@ -84,14 +91,23 @@ To change the time zone or report times: `python3 scripts/install.py --reconfigu
 **Protected zone.** For each project the installer asks which files or folders move real money or control live
 services (payments, pricing, live trading, send jobs). Each one becomes an absolute deny rule for that project's agent
 and for the CEO session. A path that does not exist is refused unless you confirm it (a typo would leave the real
-folder unprotected). If you leave the zone empty, you must type `none` to confirm, and the summary shows
-**NO PROTECTED ZONE** in a box. A template placeholder left anywhere means the install is not complete.
+folder unprotected), and the doctor fails on a missing protected path you did not confirm. If you leave a project's
+zone empty, you must type `none` to confirm, and the summary shows **NO PROTECTED ZONE** in a box. Without any
+project there is nothing to protect yet: the installer skips this step with one line and asks when you add a project.
+Each live service name you give becomes a deny rule for the `launchctl` and `systemctl` commands that name it.
+A template placeholder left anywhere means the install is not complete.
+
+**Without questions.** `python3 scripts/install.py --answers answers.yaml` reads the answers from a file. Its format
+is the one of `config/install_answers.yaml`, which every install writes (`python3 scripts/install.py --help` shows a
+full example). `--answers` counts only the paths listed under `allow_missing` as checked: if any other protected path
+does not exist, the installer stops before it writes any file.
 
 Then open Claude Code in this folder: type `claude`, press Enter, and type `recap` (for example: "recap, please").
 From now on your to-do list is `config/owner_action_queue.yaml` (open it with `open -e config/owner_action_queue.yaml`);
 the installer already put your remaining setup steps there. When you finish one, tell the CEO in Claude Code (for
 example "done: register the report service"); it sets `status: done` and `done_at`.
-Run `python3 scripts/doctor.py` any time to re-check the installation (✓ ok, ⚠ read it, ✗ fix it). It checks that
+Run `python3 scripts/doctor.py` any time to re-check the installation (✓ ok, ℹ for your information, ⚠ read it,
+✗ fix it). It checks that
 Claude Code is signed in without calling a model; `python3 scripts/doctor.py --check-login` also sends Claude one short
 test message, after asking you.
 
@@ -138,8 +154,8 @@ company."* It asks you the same questions, runs the same installer, and shows yo
 ## 3. Register the service (reports arrive by themselves)
 
 The installer wrote the service file with your paths already filled in (`service/` folder) and printed the exact
-commands for this computer at the end of its summary, under *2. register the report service*. **Paste those lines into
-Terminal as they are.** They are also in your queue item `register_report_service_…`. To print them again:
+commands for this computer at the end of its summary, under *2. register the report service* (whatever the STATUS
+line says). **Paste those lines into Terminal as they are.** They are also in your queue item `register_report_service_…`. To print them again:
 `python3 scripts/install.py --render-service`.
 
 What you paste depends on how reports reach you:
@@ -151,7 +167,9 @@ What you paste depends on how reports reach you:
 - **`telegram`:** the first lines copy the service file and open the copy in TextEdit. Replace `REPLACE_WITH_BOT_TOKEN`
   and `REPLACE_WITH_CHAT_ID` (how to get them: the box in section 2), save, close TextEdit, then paste the remaining
   lines. On Linux, the line that writes `~/.config/report-daemon/env` holds `PASTE_TOKEN` and `PASTE_CHAT_ID`:
-  replace both before pressing Enter.
+  replace both before pressing Enter. `python3 scripts/doctor.py` checks the values in that registered copy (or env
+  file): while a placeholder is left it shows ✗, and the daemon does not send but records why. Each report is still
+  saved under `state/report_daemon/reports/`.
 
 Success on macOS looks like this (`plutil` says OK, `launchctl bootstrap` prints nothing, the status says running):
 
@@ -219,9 +237,12 @@ the top of `CLAUDE.md`):
   `path`, the `mode`, and a `handoff` file that exists there. Protected zone: every critical-zone path in
   `denied_tools` as `Edit(//absolute/path/**)` (two slashes = absolute; one slash is relative to the settings source;
   use `Edit`, Claude Code ignores `Write(path)` rules), or `protected_zone: none` only if the owner confirms there is
-  none. Put the same rules in `.claude/settings.json` as `{"permissions": {"deny": [...]}}` for the CEO session.
+  none. A path that does not exist yet also goes under that agent's `allow_missing:` (the doctor fails otherwise).
+  Live services: `Bash(launchctl *name*)` and `Bash(systemctl *name*)` under `defaults.denied_tools`. Put the same
+  rules in `.claude/settings.json` as `{"permissions": {"deny": [...]}}` for the CEO session.
 - `config/owner_action_queue.yaml`: delete the example items (`example: true`).
-- `config/report_daemon.yaml`: `timezone`, quoted `report_times`, `claude_cmd` = the output of `which claude`, `delivery`.
+- `config/report_daemon.yaml`: `timezone`, quoted `report_times`, `claude_cmd` = the output of `which claude`,
+  `delivery` (`none` by default; `telegram` once you have a bot).
 - `config/autonomy_policy.md`, `config/access_control.yaml`, `HANDOFF.md`: the date, your own words, your paths.
 
 Write the service file, check, then make the first calls:
@@ -298,7 +319,7 @@ templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yam
 templates/service/                launchd plist and systemd user unit for the reporting daemon
 scripts/install.py                one-step installer (questions or --answers file), --reconfigure,
                                   --render-service; ends with the check
-scripts/doctor.py                 installation check: ✓ / ⚠ / ✗ per line, exit 1 on any ✗, --check-login
+scripts/doctor.py                 installation check: ✓ / ℹ / ⚠ / ✗ per line, exit 1 on any ✗, --check-login
 scripts/logic_agent.py            headless runner
 scripts/report_daemon.py          reporting daemon-lite: two-layer report, scheduled triggers, Telegram
 tests/                            installer, runner and daemon tests (temp dirs, stub CLI, no real calls)

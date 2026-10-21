@@ -3,12 +3,13 @@
 
   python3 scripts/install.py                          # plain questions; installs into this folder
   python3 scripts/install.py --dest ~/my-company      # installs into another folder
-  python3 scripts/install.py --answers answers.yaml   # no questions (for agents and tests); see ANSWERS below
+  python3 scripts/install.py --answers answers.yaml   # no questions (for agents and tests); format: ANSWERS below,
+                                                      # the same as config/install_answers.yaml of an installed folder
   python3 scripts/install.py --reconfigure delivery   # change one part in place: delivery (telegram | none)
   python3 scripts/install.py --reconfigure delivery --to telegram    # the same without a question
   python3 scripts/install.py --reconfigure schedule   # time zone and report times
   python3 scripts/install.py --render-service         # (re)write service/ from config/ and print the commands
-  python3 scripts/install.py --doctor [--dest DIR]    # only run the check (same as scripts/doctor.py)
+  python3 scripts/install.py --doctor [--dest DIR]    # only run the check (same as scripts/doctor.py; --verbose too)
 
 What it does, in order:
   1. creates the folders (config/, scripts/, tests/, .claude/agents/, state/report_daemon/,
@@ -17,9 +18,14 @@ What it does, in order:
      from your answers: company, owner, language, projects (name, folder, how you work with it, handoff
      file), each project's protected zone, data sources, time zone, report times, messenger
   3. protected zone: every path you name becomes an absolute deny rule (Edit(//abs/path/**)) for that
-     project's agent and for the CEO session (.claude/settings.json). Leaving it empty needs an explicit
-     "none"; the summary then shows NO PROTECTED ZONE in a box. A path that does not exist is refused
-     (interactive: asked, default no; answers file: NOT COMPLETE unless the project has allow_missing)
+     project's agent and for the CEO session (.claude/settings.json). Leaving a project's zone empty needs an
+     explicit "none"; the summary then shows NO PROTECTED ZONE in a box. Without any project there is nothing to
+     protect yet: the step is skipped with one line and asked when a project is added. A path that does not
+     exist is refused: interactive asks (default no; a yes is recorded under allow_missing), and an answers file
+     stops the installer before it writes any file (exit 2) unless the project lists the path under
+     allow_missing. doctor fails on a missing protected path that is not under allow_missing.
+     Each live service name becomes the deny rules Bash(launchctl *name*) and Bash(systemctl *name*) for every
+     project agent (defaults.denied_tools) and for the CEO session
   4. writes the owner action queue without the template's examples (plus your real setup steps),
      the files the charter refers to (config/autonomy_policy.md, config/access_control.yaml, HANDOFF.md,
      advisory_drafts/reviews/), config/report_daemon.yaml and a service file for launchd or systemd
@@ -27,7 +33,8 @@ What it does, in order:
      and --render-service work in the company folder), merges .gitignore, runs `git init`
   6. runs scripts/doctor.py, then prints the summary READ BACK FROM THE WRITTEN FILES (never from the
      answers). The install is COMPLETE only when doctor reports no failure and the files say what you
-     answered; a placeholder left anywhere means NOT COMPLETE (exit code 1)
+     answered; a placeholder left anywhere means NOT COMPLETE (exit code 1). The service registration
+     commands are printed either way (registering does not wait for the other fixes)
 
 A folder that already has an installation: interactive asks first (1 keep it and only check it, 2 answer
 again and overwrite with .bak copies, 3 stop). With --answers, an existing file that differs is kept unless
@@ -40,10 +47,11 @@ ANSWERS (YAML; every key optional except each project's protected-zone decision)
   company: "Saebyeok Data Lab"         company_one_line: "one-person data analysis consulting"
   owner: "Mina Seo"                    language: "English"
   timezone: "Asia/Seoul"               report_times: ["08:00", "20:00"]
-  messenger: telegram                  # telegram | none (reports only printed and saved)
+  messenger: none                      # none (default: reports saved as files) | telegram (needs a bot)
   roles: [cto, cro, cfo, cmo]          block_budget: 3
   owner_instruction: "Agents prepare everything up to the last click; I take only that click."
-  live_services: "newsletter sender"   # services agents must never start/stop/restart
+  live_services: "com.myshop.worker, newsletter.service"   # launchd labels or systemd units agents must never
+                                       # start, stop or restart (comma-separated, or a list)
   data_sources: [{name: revenue, source: "~/shop/revenue.csv"}]
   projects:
     - name: newsletter                 # letters, digits, _ and -
@@ -52,12 +60,12 @@ ANSWERS (YAML; every key optional except each project's protected-zone decision)
       mode: headless                   # headless | live | in_session
       handoff: HANDOFF.md              # relative to the project folder
       protected: ["billing/**", "config/pricing.yaml"]   # relative to the project folder, ~ or absolute
-      allow_missing: ["config/pricing.yaml"]   # optional: protected paths that may not exist yet (or true)
+      allow_missing: ["config/pricing.yaml"]   # optional: protected paths that may not exist yet (or true).
+                                       # ONLY these count as checked: any other missing path stops the install
     - name: notes
       path: "~/projects/notes"
       protected: none                  # ONLY when the owner said nothing there moves money or runs live
                                        # (same as protected: [] plus no_protected_zone: true)
-  no_protected_zone: true              # needed only when there are no projects
   claude_cmd: /absolute/path/to/claude # default: detected
   service: auto                        # auto | launchd | systemd | none
   git_init: true
@@ -91,6 +99,8 @@ import doctor  # noqa: E402  (stdlib only at import time)
 ROLES = ("cto", "cro", "cfo", "cmo")
 MODES = ("headless", "live", "in_session")
 DELIVERIES = ("telegram", "none")
+DEFAULT_DELIVERY = "none"  # Enter alone: the first report arrives as a file, no bot token needed
+SERVICE_NAME = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._:-]*$")  # a launchd label or a systemd unit
 RECONFIGURE = ("delivery", "schedule")
 PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 GROUP = re.compile(r"^(UNIT|CRITICAL|METRIC)_(\d+)_([A-Z_]+)$")
@@ -148,8 +158,10 @@ MSG = {
     "language": ("Language the CEO agent reports in", "CEO 에이전트 보고 언어"),
     "timezone": ("Your time zone (IANA name, e.g. Asia/Seoul, Europe/Berlin)", "타임존(IANA 이름, 예: Asia/Seoul)"),
     "report_times": ("Report times, 24h, comma-separated", "보고 시각(24시간제, 쉼표로 구분)"),
-    "messenger": ("How should reports reach you? telegram, or none (only saved to files for now)",
-                  "보고를 어디로 받을까? telegram, 또는 none(당분간 파일로만 저장)"),
+    "messenger": ("How should reports reach you? none = saved as files (no setup; switch later with --reconfigure "
+                  "delivery), or telegram (needs a bot token)",
+                  "보고를 어디로 받을까? none = 파일로 저장(설정 없음, 나중에 --reconfigure delivery 로 바꿀 수 있음), "
+                  "또는 telegram(봇 토큰 필요)"),
     "roles": ("C-level roles to install (any of cto, cro, cfo, cmo)", "설치할 C-level 역할(cto, cro, cfo, cmo 중)"),
     "owner_instruction": ("In your own words: what may the CEO agent do without asking you? (saved verbatim)",
                           "대표 본인의 말로: CEO 에이전트가 묻지 않고 해도 되는 일은? (그대로 저장된다)"),
@@ -188,13 +200,18 @@ MSG = {
                          "  money or controls a live service; Enter = do not add this project",
                          "  {name} 의 보호 경로가 없다. 경로를 입력하면 추가된다. 돈이 움직이거나 라이브 서비스를 제어하는\n"
                          "  파일이 정말 없으면 none. Enter = 이 프로젝트를 추가하지 않음"),
-    "no_projects_note": ("No project added, so there is no protected zone yet (the summary shows it in a box).\n"
-                         "To add a project later, run the installer again and choose 2.",
-                         "프로젝트 없이 진행한다. 아직 보호 구역이 없다(요약에 상자로 표시된다).\n"
-                         "나중에 추가하려면 설치기를 다시 실행해 2 를 고른다."),
-    "live_services": ("Live services agents must never start, stop or restart (optional, e.g. com.myshop.worker; "
-                      "Enter = none)",
-                      "에이전트가 시작·중지·재시작하면 안 되는 라이브 서비스 이름(선택, 예: com.myshop.worker. Enter = 없음)"),
+    "no_projects_note": ("No project, so the protected-zone setup is skipped. When you add a project later, "
+                         "the installer asks then.",
+                         "프로젝트가 없어 보호 구역 설정은 건너뜁니다. 나중에 프로젝트를 추가하면 그때 묻습니다."),
+    "live_services": ("Live services agents must never start, stop or restart: launchd labels or systemd units, "
+                      "comma-separated; each one becomes a deny rule for launchctl/systemctl (optional, e.g. "
+                      "com.myshop.worker; Enter = none)",
+                      "에이전트가 시작·중지·재시작하면 안 되는 라이브 서비스 이름: launchd 라벨이나 systemd 유닛, 쉼표로 구분. "
+                      "이름마다 launchctl/systemctl 거부 규칙이 된다(선택, 예: com.myshop.worker. Enter = 없음)"),
+    "err_service_name": ("'{v}' is not a service name (a launchd label or systemd unit such as com.myshop.worker; "
+                         "letters, digits, . _ - @ :)",
+                         "'{v}' 는 서비스 이름이 아니다(com.myshop.worker 같은 launchd 라벨이나 systemd 유닛. "
+                         "영문·숫자·. _ - @ :)"),
     "data_sources": ("Key numbers the CEO should read, one per line as name = path or API\n"
                      "(optional, e.g. revenue = ~/shop/revenue.csv; empty line = done)",
                      "CEO 가 읽을 핵심 수치, 한 줄에 하나씩 이름 = 경로 또는 API\n"
@@ -236,18 +253,34 @@ MSG = {
                            "서비스 관리자(launchd·systemd)가 없다. 프로세스를 유지하는 다른 수단으로 "
                            "python3 scripts/report_daemon.py 를 직접 실행한다."),
     "box_none": ("NO PROTECTED ZONE: {who}", "NO PROTECTED ZONE: {who} (보호 구역 없음)"),
-    "box_no_project": ("no project registered yet", "등록된 프로젝트 없음"),
     "box_l2": ("You confirmed that nothing there moves money or controls a live service.",
                "그곳에는 돈이 움직이거나 라이브 서비스를 제어하는 파일이 없다고 확인했다."),
-    "box_l2_noproj": ("No project agent exists, so no project file is protected yet.",
-                      "프로젝트 에이전트가 없어 보호되는 프로젝트 파일도 아직 없다."),
-    "box_l4_noproj": ("To add a project with its protected zone: run the installer again and choose 2.",
-                      "보호 구역과 함께 프로젝트를 추가하려면: 설치기를 다시 실행해 2 를 고른다."),
     "box_l3": ("Agents are NOT denied any file there.", "에이전트는 그곳의 어떤 파일도 거부당하지 않는다."),
     "box_l4": ("To add one: run the installer again and choose 2, or add", "추가하려면: 설치기를 다시 실행해 2 를 고르거나,"),
     "box_l5": ("  denied_tools (\"Edit(//absolute/path/**)\") in config/logic_agents.yaml",
                "  config/logic_agents.yaml 의 denied_tools 에 \"Edit(//절대/경로/**)\" 를 넣는다"),
     "saved_files": ("saved as files under {d}/reports/, not sent", "{d}/reports/ 에 파일로만 저장, 발송 없음"),
+    "saved_also": ("each report is also saved under {d}/reports/", "보고마다 {d}/reports/ 에도 파일로 남는다"),
+    "files_line": ("created:  {c} file(s){tpl}; unchanged {u}; kept as they were {k}",
+                   "created:  파일 {c}개 생성{tpl}; 바뀐 것 없음 {u}개; 기존 파일 유지 {k}개"),
+    "files_tpl": ("; template files {n} (as they are)", "; 템플릿 파일 {n}개(그대로)"),
+    "live_line": ("live:     {names} (agents and the CEO session are denied launchctl/systemctl commands naming them)",
+                  "live:     {names} (에이전트와 CEO 세션은 이 이름이 든 launchctl/systemctl 명령을 거부당한다)"),
+    "missing_later": ("does not exist yet; you said it comes later", "아직 없음. 나중에 생긴다고 확인함"),
+    "missing_typo": ("DOES NOT EXIST: a typo? fix it", "없는 경로: 오타인지 확인하고 고친다"),
+    "answers_stop": ("STOPPED: no file was written. These protected paths do not exist:",
+                     "중단: 파일을 하나도 쓰지 않았다. 아래 보호 경로가 없다:"),
+    "answers_stop_how": ("A typo here leaves the real folder unprotected. Fix the path in the answers file, or list it "
+                         "under allow_missing for that project only if the owner said it will be created later; then "
+                         "run the installer again. (An answers file counts only the paths under allow_missing as "
+                         "checked.)",
+                         "오타라면 진짜 폴더가 보호되지 않는다. 답변 파일에서 경로를 고치거나, 대표가 나중에 생긴다고 "
+                         "한 경로만 그 프로젝트의 allow_missing 에 적은 뒤 설치기를 다시 실행한다(답변 파일은 "
+                         "allow_missing 에 적은 경로만 확인한 것으로 본다)."),
+    "answers_stop_keep": ("A project kept from last time names it: run the installer again, answer n to keeping the "
+                          "projects, and add them again.",
+                          "지난번 프로젝트에 들어 있는 경로다. 설치기를 다시 실행해 프로젝트 유지에 n 으로 답하고 "
+                          "다시 추가한다."),
     "signin_no": ("NOT signed in to Claude Code: the model part of each report works only after you sign in "
                   "(run claude, type /login)",
                   "Claude Code 에 로그인되어 있지 않다. 모델 보고(요약·CEO 의견)는 로그인 후 동작한다(claude 실행 후 /login)"),
@@ -276,6 +309,8 @@ MSG = {
     "next_report": ("1. see a report now (prints only):", "1. 지금 보고 보기(출력만):"),
     "next_service": ("2. register the report service. The exact lines for this computer:",
                      "2. 보고 서비스 등록. 이 컴퓨터용 명령:"),
+    "service_anyway": ("Fix the items above first. You can register the report service now:",
+                       "먼저 위 항목을 고친다. 서비스 등록은 지금 해도 된다:"),
     "next_reregister": ("2. re-register the report service (the registered copy is older). The exact lines:",
                         "2. 보고 서비스 다시 등록(등록된 사본이 예전 것이다). 이 컴퓨터용 명령:"),
     "next_registered": ("2. report service: registered and up to date", "2. 보고 서비스: 등록됨, 최신"),
@@ -447,8 +482,34 @@ def _explicit_none(entries) -> bool:
             and entries[0].strip().lower() in NONE_WORDS)
 
 
+def split_services(raw) -> list:
+    """Service names from 'a, b' or a list. Not validated here (see service_name_error)."""
+    items = raw if isinstance(raw, list) else re.split(r"[,;\n]+", str(raw or ""))
+    out = []
+    for x in items:
+        out += [t for t in re.split(r"\s+", str(x or "").strip()) if t]
+    return list(dict.fromkeys(out))
+
+
+def service_name_error(raw) -> Optional[str]:
+    bad = [n for n in split_services(raw) if not SERVICE_NAME.match(n)]
+    return bad[0] if bad else None
+
+
+def live_rules(names: list) -> list:
+    """Deny rules for every agent and the CEO session: no launchctl/systemctl command that names the service.
+    A systemd unit is matched without its .service suffix (systemctl restart shop == shop.service)."""
+    rules = []
+    for n in names:
+        core = re.sub(r"\.service$", "", n)
+        rules += [f"Bash({tool} *{core}*)" for tool in doctor.LIVE_TOOLS]
+    return rules
+
+
 def normalize(raw: dict, dest: Path, today: date) -> tuple:
-    """(plan, problems). Applies defaults; every problem leaves a visible placeholder or a doctor failure."""
+    """(plan, problems). Applies defaults; every problem leaves a visible placeholder or a doctor failure.
+    plan["blocking"]: protected paths that do not exist and were not confirmed (allow_missing); install() writes
+    nothing while there is one."""
     problems = []
     raw = dict(raw or {})
     plan = {
@@ -457,10 +518,10 @@ def normalize(raw: dict, dest: Path, today: date) -> tuple:
         "owner": str(raw.get("owner") or git_user_name() or getpass.getuser()),
         "language": str(raw.get("language") or "English"),
         "timezone": str(raw.get("timezone") or detect_timezone()).strip(),
-        "messenger": str(raw.get("messenger") or "telegram").strip().lower(),
+        "messenger": str(raw.get("messenger") or DEFAULT_DELIVERY).strip().lower(),
         "owner_instruction": str(raw.get("owner_instruction") or DEFAULT_INSTRUCTION).strip(),
         "block_budget": raw.get("block_budget") or 3,
-        "live_services": str(raw.get("live_services") or "").strip(),
+        "live_services": ", ".join(split_services(raw.get("live_services"))),
         "service": str(raw.get("service") or "auto").strip().lower(),
         "git_init": raw.get("git_init", True) is not False,
         "today": today.isoformat(),
@@ -474,7 +535,13 @@ def normalize(raw: dict, dest: Path, today: date) -> tuple:
         problems.append(f"report_times: {err}")
     if plan["messenger"] not in DELIVERIES:
         problems.append(f"messenger must be telegram or none (got {plan['messenger']!r})")
-        plan["messenger"] = "telegram"
+        plan["messenger"] = DEFAULT_DELIVERY
+    bad = service_name_error(raw.get("live_services"))
+    if bad:
+        problems.append(f"live_services: '{bad}' is not a service name (a launchd label or systemd unit such as "
+                        f"com.myshop.worker); write the names, comma-separated")
+    plan["live_rules"] = live_rules([n for n in split_services(raw.get("live_services")) if SERVICE_NAME.match(n)])
+    plan["blocking"] = []
     roles = raw.get("roles", list(ROLES))
     roles = re.split(r"[,\s]+", roles) if isinstance(roles, str) else list(roles or [])
     roles = [str(r).strip().lower() for r in roles if str(r).strip()]
@@ -521,7 +588,8 @@ def normalize(raw: dict, dest: Path, today: date) -> tuple:
         allow_set = {str(x) for x in allow} if isinstance(allow, list) else set()
         proj = {"name": name, "description": str(p.get("description") or "").strip(), "path": str(path),
                 "mode": mode, "handoff": str(p.get("handoff") or "HANDOFF.md"), "protected_raw": [],
-                "protected": [], "rules": [], "allow_missing": allow if (allow_all or allow_set) else None}
+                "protected": [], "rules": [], "allow_missing": allow if (allow_all or allow_set) else None,
+                "later_rules": []}
         entries = p.get("protected")
         if isinstance(entries, list):  # null or empty items are no answer (an empty path would protect the root)
             entries = [e for e in entries if e is not None and str(e).strip()]
@@ -538,10 +606,10 @@ def normalize(raw: dict, dest: Path, today: date) -> tuple:
                 proj["rules"] += rules
                 if is_placeholder(e):
                     problems.append(f"project {name}: protected path {e!r} is a placeholder, not a real path")
-                elif not display_exists(disp) and not (allow_all or str(e) in allow_set):
-                    problems.append(f"project {name}: protected path does not exist: {disp} (a typo leaves the real "
-                                    f"files unprotected). Fix the path, or list it under allow_missing for this "
-                                    f"project if it will be created later")
+                elif allow_all or str(e) in allow_set:
+                    proj["later_rules"] += rules  # the owner said it comes later: doctor warns, does not fail
+                elif not display_exists(disp):
+                    plan["blocking"].append(f"project {name}: {disp}")
         else:  # missing, empty or null: not answered, and never read as "none"
             proj["state"] = "unanswered"
             ph = f"/ABSOLUTE/PATH/TO/{name}/live/**"
@@ -549,11 +617,7 @@ def normalize(raw: dict, dest: Path, today: date) -> tuple:
             problems.append(f"project {name}: protected zone not answered (list its paths in `protected`, or set "
                             f"protected: none only if the owner confirmed there are none)")
         projects.append(proj)
-    plan["projects"] = projects
-    plan["no_protected_zone"] = raw.get("no_protected_zone") is True
-    if not projects and not plan["no_protected_zone"]:
-        problems.append("no project and no confirmation: set no_protected_zone: true (the owner confirms there "
-                        "is nothing to protect yet), or add a project with its protected paths")
+    plan["projects"] = projects  # no project: nothing to protect yet, asked when one is added (no confirmation)
     return plan, problems
 
 
@@ -573,8 +637,6 @@ def answers_record(plan: dict) -> dict:
         elif p["state"] == "none":
             e["protected"] = "none"
         rec["projects"].append(e)
-    if plan["no_protected_zone"]:
-        rec["no_protected_zone"] = True
     return rec
 
 
@@ -700,7 +762,7 @@ def collect_interactive(pr: Prompter, dest: Path, prev: dict) -> dict:
     times = times if isinstance(times, list) else [times]
     raw["report_times"] = pr.ask("report_times", default=", ".join(str(x) for x in times), fallback="08:00, 20:00",
                                  validate=lambda v: pr.t("err_times", v=v) if parse_times(v)[1] else None)
-    raw["messenger"] = pr.ask("messenger", default=d.get("messenger") or "telegram", fallback="telegram",
+    raw["messenger"] = pr.ask("messenger", default=d.get("messenger") or DEFAULT_DELIVERY, fallback=DEFAULT_DELIVERY,
                               validate=lambda v: None if v.lower() in DELIVERIES else pr.t("err_messenger"))
     roles = d.get("roles") or ROLES
     raw["roles"] = pr.ask("roles", default=", ".join(str(r) for r in (roles if isinstance(roles, (list, tuple))
@@ -718,10 +780,13 @@ def collect_interactive(pr: Prompter, dest: Path, prev: dict) -> dict:
         if p:
             projects.append(p)
     raw["projects"] = projects
-    if not projects:
+    if not projects:  # nothing to protect yet: one quiet line, asked again when a project is added
         print(pr.t("no_projects_note"), file=pr.out)
-        raw["no_protected_zone"] = True  # declining every project is the decision; the summary boxes it
-    raw["live_services"] = pr.ask("live_services", default=d.get("live_services") or "")
+    prev_live = d.get("live_services") or ""
+    prev_live = ", ".join(split_services(prev_live))
+    raw["live_services"] = pr.ask("live_services", default=prev_live, fallback="",
+                                  validate=lambda v: pr.t("err_service_name", v=service_name_error(v))
+                                  if service_name_error(v) else None)
     print(pr.t("data_sources"), file=pr.out)
     raw["data_sources"] = pr.lines("data_item") or d.get("data_sources") or []
     for k in ("block_budget", "claude_cmd", "service", "git_init"):
@@ -776,14 +841,16 @@ def render_charter(plan: dict, dest: Path) -> str:
     values = {
         "COMPANY": plan["company"], "COMPANY_ONE_LINE": plan["company_one_line"], "OWNER_NAME": plan["owner"],
         "LANGUAGE": plan["language"], "CEO_PROJECT_PATH": str(dest),
-        "LIVE_SERVICES": plan["live_services"] or "any live service the company runs",
+        "LIVE_SERVICES": (f"{plan['live_services']} (launchctl/systemctl commands naming them are denied to every agent "
+                          f"and to this session)" if plan["live_services"] else "any live service the company runs"),
         "READ_ONLY_PATHS": ", ".join(f"`{p['path']}`" for p in projects) or "(none yet)",
     }
     groups = {"UNIT": [{"NAME": p["name"], "ONE_LINE": p["description"] or p["mode"], "PATH": p["path"]}
                        for p in projects],
               "CRITICAL": critical, "METRIC": plan["data_sources"]}
-    empty = {"CRITICAL": f"- (none recorded: at install on {plan['today']} the owner confirmed that no project file "
-                         f"moves money or controls a live service)",
+    empty = {"CRITICAL": (f"- (none recorded: at install on {plan['today']} the owner confirmed that no project file "
+                          f"moves money or controls a live service)" if projects else
+                          "- (none yet: no project is registered; its protected zone is asked when one is added)"),
              "METRIC": "- (none yet: add one line per metric, `name: path or API`)"}
     return render_lines(text, values, groups, empty)
 
@@ -792,9 +859,30 @@ def q(s) -> str:
     return json.dumps(str(s), ensure_ascii=False)
 
 
+def add_default_denied(head: str, rules: list) -> str:
+    """Append rules to defaults.denied_tools of the registry head (the template text above agents:)."""
+    if not rules:
+        return head
+    import yaml
+    lines = head.split("\n")
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("defaults:"))
+    deny = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("  denied_tools:"))
+    end = deny + 1
+    while end < len(lines) and lines[end].startswith("    - "):
+        end += 1
+    new = [f"    - {q(r)}                # live service (asked at install): never started, stopped or restarted"
+           for r in rules]
+    out = "\n".join(lines[:end] + new + lines[end:])
+    got = (yaml.safe_load(out).get("defaults") or {}).get("denied_tools") or []
+    if not all(r in got for r in rules):  # never write a registry that does not say what was answered
+        raise ValueError("could not add the live-service rules to defaults.denied_tools")
+    return out
+
+
 def render_registry(plan: dict) -> str:
     head = (TEMPLATES / "logic_agents.yaml").read_text().split("\nagents:\n", 1)[0].rstrip("\n")
     head = head.replace("# Copy to: config/logic_agents.yaml", f"# Written by scripts/install.py on {plan['today']}.")
+    head = add_default_denied(head, plan.get("live_rules") or [])
     lines = [head, ""]
     if not plan["projects"]:
         return "\n".join(lines + ["agents: {}", ""])
@@ -813,17 +901,20 @@ def render_registry(plan: dict) -> str:
                     else "critical zone: files that move real money or control live services")
             lines.append(f"    denied_tools:                      # {note}")
             lines += [f"      - {q(r)}" for r in p["rules"]]
+            if p.get("later_rules"):
+                lines.append("    allow_missing:                     # the owner said these may not exist yet "
+                             "(doctor warns instead of failing)")
+                lines += [f"      - {q(r)}" for r in p["later_rules"]]
         lines.append("")
     return "\n".join(lines)
 
 
 def service_blocks(dest: Path, svc_rel: str, kind: str, label: str, messenger: str, registered: bool,
-                   with_cd: Optional[bool] = None) -> list:
+                   with_cd: bool = True) -> list:
     """[(note key, [lines])]: the exact lines to paste for this computer (no <label>, no inline # comments:
-    an interactive zsh does not treat # as a comment, so a pasted comment becomes arguments)."""
+    an interactive zsh does not treat # as a comment, so a pasted comment becomes arguments). They start with
+    cd <the CEO folder>, so they work in any Terminal window."""
     qq = lambda s: shlex.quote(str(s))  # noqa: E731
-    if with_cd is None:
-        with_cd = Path.cwd().resolve() != dest.resolve()
     cd = [f"cd {qq(dest)}"] if with_cd else []
     tg = messenger == "telegram"
     status = "python3 scripts/report_daemon.py --status"
@@ -860,18 +951,29 @@ def _ko(plan_or_language) -> bool:
 
 def telegram_item(plan: dict, stamp: str, service_file: Optional[str]) -> dict:
     ko = _ko(plan)
+    svc = service_file or ("서비스 정의" if ko else "the service definition")
+    prep = (["텔레그램: @BotFather 열기 > /newbot > 받은 토큰 복사",
+             "새 봇에게 메시지를 하나 보낸 뒤 브라우저에서 https://api.telegram.org/bot<token>/getUpdates 를 연다"
+             "(<token> 을 꺾쇠까지 토큰으로 바꾼다). \"chat\":{\"id\": 뒤의 숫자를 복사한다",
+             "{\"ok\":true,\"result\":[]} 만 보이면 봇에게 메시지를 하나 더 보내고 새로고침한다",
+             f"둘 다 {svc} 의 설치된 사본(등록된 서비스 정의)의 REPLACE_WITH_BOT_TOKEN, REPLACE_WITH_CHAT_ID 자리에 넣는다. "
+             f"git 에 들어가는 파일에는 절대 넣지 않는다",
+             "넣은 뒤 python3 scripts/doctor.py: 자리표시자가 남아 있으면 ✗ 이고 데몬은 발송하지 않는다"] if ko else
+            ["Telegram: open @BotFather > /newbot > copy the token",
+             "Send your bot one message, then open https://api.telegram.org/bot<token>/getUpdates in a browser "
+             "(replace <token> including the angle brackets) and copy the number after \"chat\":{\"id\":",
+             "Empty result {\"ok\":true,\"result\":[]}: send the bot another message and reload the page",
+             f"Put both into the installed copy of {svc} (REPLACE_WITH_BOT_TOKEN, REPLACE_WITH_CHAT_ID); never "
+             f"into a file in git",
+             "Then run python3 scripts/doctor.py: while a placeholder is left it shows a failure and the daemon "
+             "does not send"])
     return {
         "id": f"setup_telegram_{stamp}", "due": plan["today"], "owner": "human", "status": "open", "action": "local",
         "ready": True,
         "title": ("텔레그램 보고 봇 만들기: 토큰·chat id 를 설치된 서비스 정의에 입력(절차 준비됨)" if ko else
                   "Create the Telegram bot for reports; put its token and chat id into the installed service "
                   "definition (steps prepared)"),
-        "prep": ["Telegram: open @BotFather > /newbot > copy the token",
-                 "Send your bot one message, then open https://api.telegram.org/bot<token>/getUpdates in a browser "
-                 "(replace <token> including the angle brackets) and copy the number after \"chat\":{\"id\":",
-                 "Empty result {\"ok\":true,\"result\":[]}: send the bot another message and reload the page",
-                 f"Put both into the installed copy of {service_file or 'the service definition'} "
-                 f"(REPLACE_WITH_BOT_TOKEN, REPLACE_WITH_CHAT_ID); never into a file in git"]}
+        "prep": prep}
 
 
 def register_item(plan: dict, dest: Path, stamp: str, svc_rel: str, kind: str, label: str, registered: bool,
@@ -902,12 +1004,18 @@ def allowlist_item(plan: dict, stamp: str) -> dict:
                   "기록(직접 고쳐도 된다)" if ko else
                   "Confirm the proposed allowlist of the project agents: say it to the CEO in Claude Code in your own "
                   "words and it records your quote, date and scope (or edit the file yourself)"),
-        "prep": ["Proposed: config/logic_agents.yaml, allowed_tools per agent (denied_tools stay as they are)",
-                 "In Claude Code in this folder, for example: \"I confirm the allowlist for <agent>: it may edit files "
-                 "in its own folder.\" The CEO then sets permissions_status: confirmed and writes "
-                 "permissions_confirmed (date, by, quote, scope)",
-                 "Until then each agent has only the tools of its own .claude/settings*.json; its first report "
-                 "ends with 'Needed permission: ...'"]}
+        "prep": (["제안: config/logic_agents.yaml 의 에이전트별 allowed_tools (denied_tools 는 그대로 유지)",
+                  "이 폴더의 Claude Code 에서 예를 들어 \"<agent> 의 허용 목록을 확정한다. 자기 폴더 안의 파일은 고쳐도 "
+                  "된다.\" 라고 말한다. CEO 가 permissions_status: confirmed 와 permissions_confirmed(날짜·확정자·"
+                  "원문·범위)를 기록한다",
+                  "그전까지 각 에이전트는 자기 폴더 .claude/settings*.json 의 도구만 쓰고, 첫 보고는 "
+                  "'Needed permission: ...' 으로 끝난다"] if ko else
+                 ["Proposed: config/logic_agents.yaml, allowed_tools per agent (denied_tools stay as they are)",
+                  "In Claude Code in this folder, for example: \"I confirm the allowlist for <agent>: it may edit files "
+                  "in its own folder.\" The CEO then sets permissions_status: confirmed and writes "
+                  "permissions_confirmed (date, by, quote, scope)",
+                  "Until then each agent has only the tools of its own .claude/settings*.json; its first report "
+                  "ends with 'Needed permission: ...'"])}
 
 
 def starter_items(plan: dict, dest: Path, label: str, service_file: Optional[str], svc_state: str = "missing",
@@ -1104,14 +1212,16 @@ def render_service(plan: dict, dest: Path, label: str) -> tuple:
     if plan["service"] == "launchd":
         t = (TEMPLATES / "service" / "com.example.report-daemon.plist").read_text()
         note = (f"<!--\n  launchd user agent for scripts/report_daemon.py, written by scripts/install.py.\n"
-                f"  Register it: paste the commands from the install summary (python3 scripts/install.py "
-                f"--render-service prints them again).\n  Put the Telegram values into the INSTALLED copy "
+                f"  Register it: paste the commands from the install summary (scripts/install.py prints them "
+                f"again with its render-service option).\n  Put the Telegram values into the INSTALLED copy "
                 f"(~/Library/LaunchAgents/{label}.plist), never into git.\n  After editing the installed copy: "
                 f"launchctl bootout gui/$(id -u)/{label}, then launchctl bootstrap gui/$(id -u) "
                 f"~/Library/LaunchAgents/{label}.plist (kickstart keeps the old definition).\n-->")
         t = re.sub(r"<!--\n  launchd user agent.*?-->", lambda m: note, t, count=1, flags=re.S)
         t = t.replace("<string>com.example.report-daemon</string>", f"<string>{escape(label)}</string>")
         t = t.replace("<string>/usr/bin/python3</string>", f"<string>{escape(sys.executable)}</string>")
+        t = t.replace('check with  /usr/bin/python3 -c "import yaml"', f'check with  {escape(sys.executable)} -c '
+                      f'"import yaml"')
         t = t.replace("/ABSOLUTE/PATH/TO/ceo_project", escape(str(dest)))
         t = re.sub(r"(<key>PATH</key>\s*<string>)[^<]*(</string>)",
                    lambda m: m.group(1) + escape(service_path_env(plan)) + m.group(2), t)
@@ -1149,13 +1259,17 @@ def _load_yaml_file(path: Path):
 def read_actual(dest: Path) -> dict:
     """What the installed files say. The summary is rendered from this, never from the answers."""
     reg = _load_yaml_file(dest / "config" / "logic_agents.yaml")
-    projects = None
+    projects, live = None, []
     if isinstance(reg, dict):
         projects = []
+        defaults = reg.get("defaults") if isinstance(reg.get("defaults"), dict) else {}
+        live = [str(r) for r in (defaults.get("denied_tools") or []) if doctor.is_live_rule(str(r))]
         agents = reg.get("agents") or {}
         for name, a in (agents.items() if isinstance(agents, dict) else []):
             a = a if isinstance(a, dict) else {}
             prot, rules, placeholder = [], [], False
+            later = a.get("allow_missing")
+            later = True if later is True else {str(x) for x in later} if isinstance(later, list) else set()
             for r in a.get("denied_tools") or []:
                 r = str(r)
                 if is_placeholder(r):
@@ -1164,7 +1278,7 @@ def read_actual(dest: Path) -> dict:
                 _, abs_path, _ = doctor.rule_path(r)
                 if abs_path:
                     rules.append(r)
-                    prot.append((abs_path, Path(doctor.glob_base(abs_path)).exists()))
+                    prot.append((abs_path, Path(doctor.glob_base(abs_path)).exists(), later is True or r in later))
             projects.append({"name": str(name), "mode": str(a.get("mode") or "headless"), "protected": prot,
                              "rules": sorted(rules), "placeholder": placeholder,
                              "path": str(doctor.resolve_agent_path(dest, a.get("path"))),
@@ -1173,7 +1287,7 @@ def read_actual(dest: Path) -> dict:
     cfg = _load_yaml_file(dest / "config" / "report_daemon.yaml")
     report = None
     if isinstance(cfg, dict):
-        report = {"delivery": str(cfg.get("delivery") or "telegram").strip().lower(),
+        report = {"delivery": str(cfg.get("delivery") or DEFAULT_DELIVERY).strip().lower(),
                   "report_times": [str(x) for x in (cfg.get("report_times") or [])],
                   "timezone": str(cfg.get("timezone") or ""),
                   "log_dir": str(cfg.get("log_dir") or "state/report_daemon"),
@@ -1191,7 +1305,7 @@ def read_actual(dest: Path) -> dict:
             state = "differs" if doctor.service_differs(text, installed.read_text(errors="replace")) else "same"
         services.append({"rel": f"service/{f.name}", "kind": kind, "label": m.group(1) if m else f.stem,
                          "telegram": kind != "launchd" or "REPORT_TELEGRAM_TOKEN" in text, "installed": state})
-    return {"projects": projects, "report": report, "services": services}
+    return {"projects": projects, "report": report, "services": services, "live": live}
 
 
 def differences(plan: dict, actual: dict, service_rel: Optional[str]) -> list:
@@ -1228,6 +1342,10 @@ def differences(plan: dict, actual: dict, service_rel: Optional[str]) -> list:
             want_rules = sorted(r for r in w["rules"] if not is_placeholder(r) and doctor.rule_path(r)[1])
             if h["rules"] != want_rules or h["none"] != (w["state"] == "none"):
                 out.append(f"config/logic_agents.yaml: the protected zone of {name} is not the one you answered")
+        lost = [r for r in plan.get("live_rules") or [] if r not in actual.get("live", [])]
+        if lost:
+            out.append(f"config/logic_agents.yaml does not deny the live services you answered (first missing: "
+                       f"{lost[0]} in defaults.denied_tools)")
     if service_rel:
         svc = next((s for s in actual["services"] if s["rel"] == service_rel), None)
         if svc is None:
@@ -1243,6 +1361,7 @@ class Writer:
         self.dest, self.force, self.confirm = dest, force, confirm or (lambda rel: False)
         self.stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.created, self.same, self.kept, self.replaced, self.notes = [], [], [], [], []
+        self.in_place = []  # template files that are already where they belong (installing into the clone itself)
         self.updated = 0  # installer-owned files refreshed without a backup (templates/)
 
     def write(self, rel: str, text: str, record: bool = False, owned: bool = False) -> bool:
@@ -1273,7 +1392,7 @@ class Writer:
     def copy(self, src: Path, rel: str, owned: bool = False) -> None:
         dst = self.dest / rel
         if dst.exists() and dst.resolve() == src.resolve():
-            self.same.append(rel)
+            self.in_place.append(rel)
             return
         if self.write(rel, src.read_text(), owned=owned):
             os.chmod(dst, src.stat().st_mode & 0o777)
@@ -1363,9 +1482,24 @@ def write_answers_record(dest: Path, rec: dict, w: Writer) -> None:
             "--answers config/install_answers.yaml\n" + yaml.safe_dump(rec, sort_keys=False, allow_unicode=True))
 
 
+def stop_missing(plan: dict, lang: str, out, kept_projects: bool = False) -> int:
+    """A protected path that does not exist and was not confirmed: write nothing (exit 2). Running on would
+    write a deny rule for the typo and leave the real folder unprotected."""
+    print("", file=out)
+    print(say(lang, "answers_stop"), file=out)
+    for b in plan["blocking"]:
+        print(f"  - {b}", file=out)
+    print(say(lang, "answers_stop_keep" if kept_projects else "answers_stop_how"), file=out)
+    print(say(lang, "status_not").split(" - ", 1)[0], file=out)
+    return 2
+
+
 def install(plan: dict, problems: list, dest: Path, force: bool = False,
-            confirm: Optional[Callable] = None, out=None, lang: str = "en") -> int:
+            confirm: Optional[Callable] = None, out=None, lang: str = "en", interactive: bool = False) -> int:
     out = out or sys.stdout
+    if plan.get("blocking"):  # interactive answers confirm every missing path, so there it is a kept project
+        return stop_missing(plan, lang, out, kept_projects=interactive)
+    dest.mkdir(parents=True, exist_ok=True)
     w = Writer(dest, force, confirm)
     for d in DIRS:
         (dest / d).mkdir(parents=True, exist_ok=True)
@@ -1408,7 +1542,7 @@ def install(plan: dict, problems: list, dest: Path, force: bool = False,
     if added:
         w.notes.append(f".gitignore: added {' '.join(added)}")
     real_rules = [r for p in plan["projects"] for r in p["rules"] if not is_placeholder(r)]
-    n, err = merge_ceo_settings(dest, real_rules)
+    n, err = merge_ceo_settings(dest, real_rules + list(plan.get("live_rules") or []))
     if err:
         problems.append(err)
     elif n:
@@ -1445,13 +1579,31 @@ def _box(lines: list) -> list:
     return ["!" * width] + [f"!!  {x}{' ' * (width - 8 - _width(x))}  !!" for x in lines] + ["!" * width]
 
 
+def service_lines(dest: Path, actual: dict, lang: str) -> list:
+    """The registration block for each rendered service file (printed whatever the STATUS)."""
+    L = []
+    r = actual["report"]
+    for s in actual["services"]:
+        delivery = r["delivery"] if r else DEFAULT_DELIVERY
+        if s["installed"] == "same":
+            L.append(f"  {say(lang, 'next_registered')}")
+            continue
+        L.append(f"  {say(lang, 'next_reregister' if s['installed'] == 'differs' else 'next_service')}")
+        for note, lines in service_blocks(dest, s["rel"], s["kind"], s["label"], delivery,
+                                          registered=s["installed"] != "missing"):
+            L.append(f"     {say(lang, note)}")
+            L += [f"       {ln}" for ln in lines]
+    return L
+
+
 def summary_lines(dest: Path, actual: dict, rep, fixes: list, complete: bool, lang: str,
                   w: Optional[Writer] = None, notes=()) -> list:
     L = ["", "== install summary ==", f"folder:   {dest}"]
     if w is None:
         L.append(f"files:    {say(lang, 'nothing_changed')}")
     else:
-        L.append(f"created:  {len(w.created)} file(s); unchanged {len(w.same)}; kept as they were {len(w.kept)}"
+        tpl = say(lang, "files_tpl", n=len(w.in_place)) if w.in_place else ""
+        L.append(say(lang, "files_line", c=len(w.created), tpl=tpl, u=len(w.same), k=len(w.kept))
                  + (f"; replaced {len(w.replaced)}" if w.replaced else "")
                  + (f"; templates/ refreshed {w.updated}" if w.updated else ""))
         for rel in w.kept:
@@ -1463,27 +1615,32 @@ def summary_lines(dest: Path, actual: dict, rep, fixes: list, complete: bool, la
     projects = actual["projects"]
     if projects is None:
         L.append("projects: (config/logic_agents.yaml cannot be read)")
+    elif not projects:  # nothing to protect yet: one quiet line, no box
+        L.append(f"projects: none yet. {say(lang, 'no_projects_note')}")
     else:
-        L.append("projects: " + (", ".join(f"{x['name']} ({x['mode']}, {len(x['protected'])} protected)"
-                                           for x in projects) or "none yet"))
+        L.append("projects: " + ", ".join(f"{x['name']} ({x['mode']}, {len(x['protected'])} protected)"
+                                          for x in projects))
         for x in projects:
-            for path, exists in x["protected"]:
-                L.append(f"  protected  {x['name']}: {path}" + ("" if exists else "  (does not exist yet)"))
+            for path, exists, later in x["protected"]:
+                tag = "" if exists else f"  ({say(lang, 'missing_later' if later else 'missing_typo')})"
+                L.append(f"  protected  {x['name']}: {path}{tag}")
             if x["placeholder"]:
                 L.append(f"  protected  {x['name']}: (a template placeholder, protects nothing)")
         unprotected = [x["name"] for x in projects if x["none"] and not x["protected"]]
-        if unprotected or not projects:
-            who = ", ".join(unprotected) if unprotected else say(lang, "box_no_project")
+        if unprotected:  # a project whose owner confirmed there is nothing to protect
             L.append("")
-            L += _box([say(lang, "box_none", who=who), say(lang, "box_l2"), say(lang, "box_l3"),
-                       say(lang, "box_l4"), say(lang, "box_l5")] if unprotected else
-                      [say(lang, "box_none", who=who), say(lang, "box_l2_noproj"), say(lang, "box_l4_noproj")])
+            L += _box([say(lang, "box_none", who=", ".join(unprotected)), say(lang, "box_l2"), say(lang, "box_l3"),
+                       say(lang, "box_l4"), say(lang, "box_l5")])
+    live = actual.get("live") or []
+    if live:
+        names = list(dict.fromkeys(re.sub(r"^Bash\(\w+ \*(.+)\*\)$", r"\1", x) for x in live))
+        L.append(say(lang, "live_line", names=", ".join(names)))
     r = actual["report"]
     if r is None:
         L.append("reports:  (config/report_daemon.yaml cannot be read)")
     else:
-        where = f" ({say(lang, 'saved_files', d=r['log_dir'])})" if r["delivery"] == "none" else ""
-        L.append(f"reports:  {', '.join(r['report_times'])} {r['timezone']} via {r['delivery']}{where}")
+        where = say(lang, "saved_files" if r["delivery"] == "none" else "saved_also", d=r["log_dir"])
+        L.append(f"reports:  {', '.join(r['report_times'])} {r['timezone']} via {r['delivery']} ({where})")
     for s in actual["services"]:
         L.append(f"service:  {s['rel']} (label {s['label']}; registered: {REGISTERED[s['installed']]})")
     login = getattr(rep, "login", None)
@@ -1494,21 +1651,15 @@ def summary_lines(dest: Path, actual: dict, rep, fixes: list, complete: bool, la
         L.append(say(lang, "status_not"))
         L += [f"  - {x}" if not x.startswith("  ") else f"  {x}" for x in fixes]
         L += [f"  - {x}" for x in rep.failures]
+        svc = service_lines(dest, actual, lang)
+        if svc:  # registering does not depend on the fixes above; the README promises these lines
+            L += ["", say(lang, "service_anyway")] + svc
         return L
     L.append(say(lang, "status_ok"))
     L += ["", say(lang, "next")]
     cd = "" if Path.cwd().resolve() == dest.resolve() else f"cd {shlex.quote(str(dest))} && "
     L.append(f"  {say(lang, 'next_report')}  {cd}python3 scripts/report_daemon.py --once --dry-run")
-    for s in actual["services"]:
-        delivery = r["delivery"] if r else "none"
-        if s["installed"] == "same":
-            L.append(f"  {say(lang, 'next_registered')}")
-            continue
-        L.append(f"  {say(lang, 'next_reregister' if s['installed'] == 'differs' else 'next_service')}")
-        for note, lines in service_blocks(dest, s["rel"], s["kind"], s["label"], delivery,
-                                          registered=s["installed"] != "missing"):
-            L.append(f"     {say(lang, note)}")
-            L += [f"       {ln}" for ln in lines]
+    L += service_lines(dest, actual, lang)
     headless = [x["name"] for x in (projects or []) if x["mode"] == "headless"]
     if headless:
         L.append(f"  {say(lang, 'next_agent')}  {cd}python3 scripts/logic_agent.py {headless[0]} "
@@ -1641,7 +1792,7 @@ def reconfigure(dest: Path, item: str, pr: Optional[Prompter], to: Optional[str]
     if item == "delivery":
         new = to or raw.get("messenger")
         if new is None and pr:
-            new = pr.ask("messenger", default=cur.get("delivery") or "telegram", fallback="telegram",
+            new = pr.ask("messenger", default=cur.get("delivery") or DEFAULT_DELIVERY, fallback=DEFAULT_DELIVERY,
                          validate=lambda v: None if v.lower() in DELIVERIES else pr.t("err_messenger"))
         if new is None:
             print(say(lang, "need_to"), file=sys.stderr)
@@ -1707,17 +1858,8 @@ def reconfigure(dest: Path, item: str, pr: Optional[Prompter], to: Optional[str]
     print("== doctor ==", file=out)
     rep = doctor.run(dest, out=out)
     actual = read_actual(dest)
-    for line in summary_lines(dest, actual, rep, [], not rep.failures, lang, w=w):
+    for line in summary_lines(dest, actual, rep, [], not rep.failures, lang, w=w):  # service lines included
         print(line, file=out)
-    if rep.failures:  # summary_lines hides "next" then, but re-registering is often the fix itself
-        delivery = (actual["report"] or {}).get("delivery", "none")
-        for s in actual["services"]:
-            if s["installed"] == "differs":
-                print(f"\n{say(lang, 'next_reregister')}", file=out)
-                for note, lines in service_blocks(dest, s["rel"], s["kind"], s["label"], delivery, registered=True):
-                    print(f"  {say(lang, note)}", file=out)
-                    for ln in lines:
-                        print(f"    {ln}", file=out)
     running = [s for s in actual["services"] if s["installed"] == "same"]
     if restart and running and not rep.failures:
         print(f"\n{say(lang, 'restart_after')}", file=out)
@@ -1759,11 +1901,17 @@ def ensure_yaml(interactive: bool, lang: str, pr: Optional[Prompter]) -> bool:
 
 
 def main(argv: Optional[list] = None, inp: Callable = input) -> int:
-    ap = argparse.ArgumentParser(description="Install C-Level Agent OS into a folder (see the module docstring)")
+    doc = __doc__ or ""
+    ap = argparse.ArgumentParser(
+        description="Install C-Level Agent OS into a folder. Without --answers it asks plain questions.",
+        epilog=doc[doc.index("ANSWERS ("):doc.index("Dependencies:")] if "ANSWERS (" in doc else None,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dest", default=".", help="CEO project folder (default: the current folder)")
-    ap.add_argument("--answers", help="YAML answers file: install (or --reconfigure) without questions")
+    ap.add_argument("--answers", help="YAML answers file: install (or --reconfigure) without questions. Format: "
+                    "ANSWERS below, the same as config/install_answers.yaml of an installed folder")
     ap.add_argument("--force", action="store_true", help="replace existing generated files (a backup is kept)")
     ap.add_argument("--doctor", action="store_true", help="only run the installation check")
+    ap.add_argument("--verbose", action="store_true", help="with --doctor: also the optional checks (pytest)")
     ap.add_argument("--reconfigure", choices=RECONFIGURE,
                     help="change one part of an existing installation in place: delivery or schedule")
     ap.add_argument("--to", help="with --reconfigure delivery: telegram or none, without a question")
@@ -1776,7 +1924,7 @@ def main(argv: Optional[list] = None, inp: Callable = input) -> int:
     dest = Path(os.path.expanduser(a.dest)).resolve()
     lang = a.lang or detect_lang()
     if a.doctor:
-        return 1 if doctor.run(dest).failures else 0
+        return 1 if doctor.run(dest, verbose=a.verbose).failures else 0
     interactive = not (a.answers or a.to or a.render_service)
     pr = Prompter(lang, inp=inp) if interactive else None
     if not ensure_yaml(interactive, lang, pr):
@@ -1797,7 +1945,6 @@ def main(argv: Optional[list] = None, inp: Callable = input) -> int:
     try:
         if a.reconfigure:
             return reconfigure(dest, a.reconfigure, pr, a.to, raw, lang)
-        dest.mkdir(parents=True, exist_ok=True)
         force = a.force
         if raw is None:
             existing = [r for r in GENERATED if (dest / r).is_file()]
@@ -1818,7 +1965,7 @@ def main(argv: Optional[list] = None, inp: Callable = input) -> int:
         print(say(lang, "stopped"))
         return 130
     plan, problems = normalize(raw, dest, date.today())
-    return install(plan, problems, dest, force=force, lang=lang)
+    return install(plan, problems, dest, force=force, lang=lang, interactive=not a.answers)
 
 
 if __name__ == "__main__":

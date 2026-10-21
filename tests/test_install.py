@@ -1,8 +1,12 @@
 """Tests for scripts/install.py and scripts/doctor.py.
 
-Pinned behaviour: an answers-file install is COMPLETE and doctor passes | a placeholder path, a project
-whose protected zone was not answered, or a protected path that does not exist leaves the install NOT
-COMPLETE | `none` counts only when it is written | the template's example queue items never reach the
+Pinned behaviour: an answers-file install is COMPLETE and doctor passes | a placeholder path or a project
+whose protected zone was not answered leaves the install NOT COMPLETE | an answers file with a protected path
+that does not exist and is not under allow_missing writes no file at all, and doctor fails on such a path, so
+re-run keep, --doctor and doctor.py agree | without projects there is no box and no confirmation |
+live services become launchctl/systemctl deny rules | Enter alone means delivery none | the service commands
+are printed whatever the STATUS | Telegram placeholders in the registered copy fail doctor and are never sent |
+`none` counts only when it is written | the template's example queue items never reach the
 installed queue | the files the charter refers to are created | protected paths become absolute Edit(//...)
 deny rules for the agent and the CEO session | every question has a default or an Enter that leaves it
 (an all-Enter run ends), the first screen states the question count, and errors use the question language |
@@ -217,7 +221,8 @@ class Incomplete(Base):
         self.assertEqual(rc, 1)
         self.assertIn("STATUS: NOT COMPLETE", out)
         self.assertNotIn("STATUS: COMPLETE", out)
-        self.assertNotIn("\nnext:", out)  # no next steps while it is not complete
+        self.assertNotIn("\nnext:", out)  # no next steps while it is not complete ...
+        self.assertIn("You can register the report service now:", out)  # ... except the service lines (B-2)
         rep, _ = self.doctor()
         self.assertTrue(any("ABSOLUTE/PATH" in m or "placeholder" in m for m in rep.failures), rep.failures)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -248,14 +253,27 @@ class Incomplete(Base):
 class AnswersGuard(Base):
     """--answers is the path the agent skill uses: it must refuse what the questions refuse."""
 
-    def test_missing_protected_path_is_not_complete(self):
+    def test_missing_protected_path_writes_no_file(self):
         a = self.answers()
-        a["projects"][0]["protected"] = ["paymnets"]  # a typo of a real folder
+        a["projects"][0]["protected"] = ["billing/**", "paymnets"]  # a typo of a real folder
         rc, out = self.run_install(a)
-        self.assertEqual(rc, 1, out)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("STOPPED: no file was written", out)
+        self.assertIn(f"project shop: {self.shop}/paymnets", out)
+        self.assertIn("allow_missing", out)
         self.assertIn("STATUS: NOT COMPLETE", out)
-        self.assertIn("protected path does not exist", out)
-        self.assertIn("paymnets  (does not exist yet)", out)
+        self.assertNotIn("== doctor ==", out)
+        self.assertFalse(self.dest.exists())  # not even the folder
+
+    def test_missing_protected_path_leaves_an_existing_install_untouched(self):
+        rc, out = self.run_install(self.answers())
+        self.assertEqual(rc, 0, out)
+        before = {p: p.read_bytes() for p in self.dest.rglob("*") if p.is_file()}
+        a = self.answers()
+        a["projects"][0]["protected"] = ["paymnets"]
+        rc, out = self.run_install(a, "--force")
+        self.assertEqual(rc, 2, out)
+        self.assertEqual({p: p.read_bytes() for p in self.dest.rglob("*") if p.is_file()}, before)
 
     def test_allow_missing_accepts_a_path_that_comes_later(self):
         a = self.answers()
@@ -263,9 +281,35 @@ class AnswersGuard(Base):
         a["projects"][0]["allow_missing"] = ["payouts"]
         rc, out = self.run_install(a)
         self.assertEqual(rc, 0, out)
-        self.assertIn("payouts  (does not exist yet)", out)
+        self.assertIn("payouts  (does not exist yet; you said it comes later)", out)
         self.assertEqual(yaml.safe_load(self.read("config/install_answers.yaml"))["projects"][0]["allow_missing"],
                          ["payouts"])
+        shop = yaml.safe_load(self.read("config/logic_agents.yaml"))["agents"]["shop"]
+        self.assertEqual(shop["allow_missing"], [f"Edit(/{self.shop}/payouts)", f"Edit(/{self.shop}/payouts/**)"])
+        rep, text = self.doctor()
+        self.assertEqual(rep.failures, [], text)
+        self.assertTrue(any(lv == "warn" and "comes later" in m for lv, m in rep.rows), text)
+
+    def test_a_typo_in_the_files_fails_every_entrance_alike(self):
+        """C3/C4: a registry that names a missing path without allow_missing (an older install, a hand edit)."""
+        a = self.answers()
+        a["projects"][0]["protected"] = ["billing/**", "paymnets"]
+        a["projects"][0]["allow_missing"] = ["paymnets"]
+        self.assertEqual(self.run_install(a)[0], 0)
+        reg = self.dest / "config" / "logic_agents.yaml"
+        data = yaml.safe_load(reg.read_text())
+        del data["agents"]["shop"]["allow_missing"]
+        reg.write_text(yaml.safe_dump(data, sort_keys=False))
+        rep, text = self.doctor()
+        self.assertTrue(any("protected path does not exist" in m and "paymnets" in m for m in rep.failures), text)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(doctor.main(["--root", str(self.dest)]), 1)
+        rc, _ = self.run_main(["--doctor"])
+        self.assertEqual(rc, 1)
+        rc, out, _ = interactive(self, ["1"])  # re-run, 1 = keep
+        self.assertEqual(rc, 1, out)
+        self.assertIn("STATUS: NOT COMPLETE", out)
+        self.assertIn("paymnets  (DOES NOT EXIST: a typo? fix it)", out)
 
     def test_none_counts_only_when_written(self):
         for value in (None, [], ""):
@@ -299,21 +343,40 @@ class ProtectedZone(Base):
         rep, text = self.doctor()
         self.assertTrue(any(lv == "warn" and "NO PROTECTED ZONE" in m for lv, m in rep.rows), text)
 
-    def test_no_projects_needs_confirmation(self):
-        rc, _ = self.run_install(self.answers(projects=[]))
-        self.assertEqual(rc, 1)
-        rc, out = self.run_install(self.answers(projects=[], no_protected_zone=True), "--force")
+    def test_no_projects_is_one_quiet_line(self):
+        """Owner decision (2026-10-21): without projects there is nothing to protect yet; no box, no warning."""
+        rc, out = self.run_install(self.answers(projects=[]))  # no confirmation key needed
         self.assertEqual(rc, 0, out)
-        self.assertIn("NO PROTECTED ZONE: no project registered yet", out)
+        self.assertNotIn("NO PROTECTED ZONE", out)
+        self.assertNotIn("!!!!", out)
+        self.assertIn("projects: none yet. No project, so the protected-zone setup is skipped. When you add a "
+                      "project later, the installer asks then.", out)
+        self.assertIn("none yet: no project is registered", self.read("CLAUDE.md"))
+        self.assertNotIn("owner confirmed", self.read("CLAUDE.md"))
+        rep, text = self.doctor()
+        self.assertTrue(any(lv == "info" and "no project agents registered" in m for lv, m in rep.rows), text)
+        self.assertFalse(any(lv == "warn" and "no project agents" in m for lv, m in rep.rows), text)
+        self.assertIn("ℹ no project agents registered", text)
 
     def test_box_keeps_the_english_token_in_korean(self):
+        a = self.answers()
+        a["projects"][0]["protected"] = "none"
         f = self.tmp / "a.yaml"
-        f.write_text(yaml.safe_dump(self.answers(projects=[], no_protected_zone=True)))
+        f.write_text(yaml.safe_dump(a))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             install.main(["--answers", str(f), "--dest", str(self.dest), "--lang", "ko"])
-        self.assertIn("NO PROTECTED ZONE: 등록된 프로젝트 없음 (보호 구역 없음)", out.getvalue())
+        self.assertIn("NO PROTECTED ZONE: shop (보호 구역 없음)", out.getvalue())
         self.assertIn("STATUS: COMPLETE (설치 완료)", out.getvalue())
+
+    def test_no_projects_in_korean_is_the_quiet_line(self):
+        f = self.tmp / "a.yaml"
+        f.write_text(yaml.safe_dump(self.answers(projects=[])))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            install.main(["--answers", str(f), "--dest", str(self.dest), "--lang", "ko"])
+        self.assertIn("프로젝트가 없어 보호 구역 설정은 건너뜁니다. 나중에 프로젝트를 추가하면 그때 묻습니다.", out.getvalue())
+        self.assertNotIn("보호 구역 없음", out.getvalue())
 
 
 class Queue(Base):
@@ -354,7 +417,15 @@ class Questions(Base):
                       f"about {m} minutes", out)
         self.assertIn("Ctrl+C", out)
         self.assertTrue(any("[y/N]" in p for p in asked if "project folder" in p))  # adding a project defaults to no
-        self.assertIn("NO PROTECTED ZONE: no project registered yet", out)
+        self.assertIn("No project, so the protected-zone setup is skipped.", out)
+        self.assertNotIn("NO PROTECTED ZONE", out)
+        self.assertNotIn("!!!!", out)
+        # K6 / owner decision: Enter alone = delivery none, so the first report arrives as a file without a bot
+        self.assertTrue(any(p.startswith("How should reports reach you?") and p.rstrip().endswith("[none]:")
+                            for p in asked), asked)
+        self.assertEqual(yaml.safe_load(self.read("config/report_daemon.yaml"))["delivery"], "none")
+        self.assertFalse([i for i in self.queue_ids() if i.startswith("setup_telegram_")])
+        self.assertIn("via none (saved as files under state/report_daemon/reports/, not sent)", out)
 
     def test_empty_folder_leaves_the_project_and_name_defaults_to_the_folder(self):
         rc, out, asked = interactive(self, [
@@ -429,6 +500,19 @@ class Questions(Base):
         self.assertTrue(any("Not found" in p and "[y/N]" in p for p in asked))
         self.assertEqual(yaml.safe_load(self.read("config/logic_agents.yaml"))["agents"]["shop"]["denied_tools"],
                          [f"Edit(/{self.shop}/billing/**)"])
+
+    def test_a_confirmed_missing_path_is_recorded_and_doctor_only_warns(self):
+        rc, out, asked = interactive(self, [
+            "", "", "", "", "", "", "", "", "",
+            "y", str(self.shop), "", "", "", "",
+            "payouts", "y", "",                      # not there yet: the owner confirms it comes later
+            "", "", "",
+        ])
+        self.assertEqual(rc, 0, out)
+        shop = yaml.safe_load(self.read("config/logic_agents.yaml"))["agents"]["shop"]
+        self.assertEqual(shop["allow_missing"], [f"Edit(/{self.shop}/payouts)", f"Edit(/{self.shop}/payouts/**)"])
+        rep, text = self.doctor()
+        self.assertEqual(rep.failures, [], text)
 
     def test_errors_follow_the_question_language(self):
         rc, out, asked = interactive(self, ["", "", "", "", "KST", ""], lang="ko")
@@ -644,6 +728,12 @@ class Login(Base):
         self.assertIn("sign-in:  NOT signed in to Claude Code: the model part of each report works only after you "
                       "sign in", out)
         self.assertIn("/login", out)
+        # B-2: the service lines are printed whatever the STATUS, below one line that says so
+        tail = out.split("STATUS: NOT COMPLETE", 1)[1]
+        self.assertIn("Fix the items above first. You can register the report service now:", tail)
+        self.assertIn("2. register the report service", tail)
+        self.assertIn("launchctl bootstrap gui/$(id -u)", tail)
+        self.assertNotIn("\nnext:", out)
 
     def test_signed_in_is_ok_and_no_model_call_is_made(self):
         rc, out = self.run_install(self.answers())
@@ -658,6 +748,20 @@ class Login(Base):
         rep, text = self.doctor()
         self.assertIsNone(rep.login)
         self.assertTrue(any(lv == "warn" and "--check-login" in m for lv, m in rep.rows), text)
+
+    def test_check_login_does_not_ask_when_not_signed_in(self):
+        """B-5: auth status already says no, so a test message would only fail: no question, no model call."""
+        write_stub(self.stub, AUTH_OUT)
+        self.run_install(self.answers())
+        log = self.stub.parent / "calls.log"
+        log.write_text("")
+
+        def boom():
+            raise AssertionError("asked although not signed in")
+        rep, text = self.doctor(login=True, consent=boom)
+        self.assertFalse([c for c in log.read_text().splitlines() if c.startswith("-p")])
+        self.assertTrue(any(lv == "info" and "--check-login skipped" in m for lv, m in rep.rows), text)
+        self.assertEqual(rep.login, False)
 
     def test_check_login_calls_once_only_after_yes(self):
         self.run_install(self.answers())
@@ -697,6 +801,168 @@ class ServiceChecks(Base):
             items = yaml.safe_load(self.read("config/owner_action_queue.yaml"))
             reg = next(i for i in items if i["id"].startswith("register_report_service_"))
             self.assertIn(f"cd {self.dest}", reg["prep"])
+
+
+class TelegramValues(Base):
+    """B-3: doctor reads the Telegram values where the service reads them; placeholders fail and are never sent."""
+
+    def register(self, text=None) -> Path:
+        agents = self.home / "Library" / "LaunchAgents"
+        agents.mkdir(parents=True, exist_ok=True)
+        dst = agents / self.plist().name
+        dst.write_text(text if text is not None else self.plist().read_text())
+        return dst
+
+    def test_placeholders_in_the_registered_copy_fail(self):
+        self.run_install(self.answers())
+        self.register()  # registered without replacing REPLACE_WITH_...
+        rep, text = self.doctor()
+        self.assertTrue(any("still the placeholders" in m and "no report is sent" in m for m in rep.failures), text)
+        rc, out, _ = interactive(self, ["1"])  # keep: the same verdict
+        self.assertEqual(rc, 1, out)
+
+    def test_real_values_pass_and_no_shell_environment_is_asked_for(self):
+        self.run_install(self.answers())
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("REPORT_TELEGRAM_TOKEN", None)
+            rep, text = self.doctor()
+        self.assertNotIn("in the environment", text)  # README: the values live in the service definition only
+        self.register(self.plist().read_text().replace("REPLACE_WITH_BOT_TOKEN", "123456:" + "a" * 30)
+                      .replace("REPLACE_WITH_CHAT_ID", "42"))
+        rep, text = self.doctor()
+        self.assertEqual(rep.failures, [], text)
+        self.assertTrue(any(lv == "ok" and "Telegram values set in the registered copy" in m for lv, m in rep.rows))
+        self.assertNotIn("123456:", text)  # never printed
+
+    def test_systemd_env_file_is_checked(self):
+        self.run_install(self.answers(service="systemd"))
+        unit_dir = self.home / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        shutil.copy(self.dest / "service" / "report-daemon.service", unit_dir / "report-daemon.service")
+        rep, text = self.doctor()
+        self.assertTrue(any("cannot be read" in m and "env is missing" in m for m in rep.failures), text)
+        env = self.home / ".config" / "report-daemon" / "env"
+        env.parent.mkdir(parents=True)
+        env.write_text("REPORT_TELEGRAM_TOKEN=PASTE_TOKEN\nREPORT_TELEGRAM_CHAT_ID=PASTE_CHAT_ID\n")
+        rep, text = self.doctor()
+        self.assertTrue(any("still the placeholders" in m for m in rep.failures), text)
+        env.write_text("REPORT_TELEGRAM_TOKEN=123456:" + "a" * 30 + "\nREPORT_TELEGRAM_CHAT_ID=42\n")
+        rep, text = self.doctor()
+        self.assertEqual(rep.failures, [], text)
+
+    def test_summary_says_where_the_report_text_is_kept(self):
+        rc, out = self.run_install(self.answers())
+        self.assertIn("via telegram (each report is also saved under state/report_daemon/reports/)", out)
+
+
+class LiveServices(Base):
+    """B-4: each live service name becomes launchctl/systemctl deny rules for every agent and the CEO session."""
+
+    def test_names_become_deny_rules_everywhere(self):
+        rc, out = self.run_install(self.answers(live_services="com.myshop.worker, newsletter.service"))
+        self.assertEqual(rc, 0, out)
+        want = ["Bash(launchctl *com.myshop.worker*)", "Bash(systemctl *com.myshop.worker*)",
+                "Bash(launchctl *newsletter*)", "Bash(systemctl *newsletter*)"]
+        reg = yaml.safe_load(self.read("config/logic_agents.yaml"))
+        self.assertTrue(all(r in reg["defaults"]["denied_tools"] for r in want), reg["defaults"]["denied_tools"])
+        self.assertIn("Bash(ssh *sudo*)", reg["defaults"]["denied_tools"])  # the template's rules stay
+        deny = json.loads(self.read(".claude/settings.json"))["permissions"]["deny"]
+        self.assertTrue(all(r in deny for r in want), deny)
+        self.assertIn("live:     com.myshop.worker, newsletter", out)
+        self.assertIn("com.myshop.worker, newsletter.service (launchctl/systemctl commands naming them are denied",
+                      self.read("CLAUDE.md"))
+        r = subprocess.run([sys.executable, "scripts/logic_agent.py", "shop", "-p", "status", "--dry-run"],
+                           cwd=self.dest, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Bash(launchctl *com.myshop.worker*)", r.stdout)
+        rep, text = self.doctor()
+        self.assertEqual(rep.failures, [], text)
+        self.assertIn("protected paths and live services (.claude/settings.json, 6 rule(s))", text)
+
+    def test_a_list_works_and_a_sentence_is_refused(self):
+        rc, out = self.run_install(self.answers(live_services=["shop-api"]))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Bash(systemctl *shop-api*)", self.read("config/logic_agents.yaml"))
+        rc, out = self.run_install(self.answers(live_services="뉴스레터 발송기"), "--force")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("is not a service name", out)
+
+    def test_interactive_refuses_a_non_name_and_takes_the_next(self):
+        rc, out, asked = interactive(self, ["", "", "", "", "", "", "", "", "", "",
+                                            "뉴스레터 발송기", "com.myshop.worker", ""])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("is not a service name", out)
+        self.assertIn("Bash(launchctl *com.myshop.worker*)", self.read("config/logic_agents.yaml"))
+
+    def test_kept_registry_without_the_rules_is_a_difference(self):
+        self.run_install(self.answers())
+        rc, out = self.run_install(self.answers(live_services="com.myshop.worker"))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("does not deny the live services you answered", out)
+
+
+class SmallFixes(Base):
+    """B-6, K1: cd line, python path in the plist comment, template file count, queue in the report language."""
+
+    def test_render_service_starts_with_cd_even_in_the_folder(self):
+        self.run_install(self.answers(messenger="none"))
+        r = subprocess.run([sys.executable, "scripts/install.py", "--render-service", "--lang", "en"],
+                           cwd=self.dest, capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "HOME": str(self.home)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        cmds = [ln.strip() for ln in r.stdout.splitlines() if ln.startswith("    ")]
+        self.assertEqual(cmds[0], f"cd {self.dest}")
+
+    def test_plist_comment_names_the_same_python_and_parses_as_xml(self):
+        import plistlib
+        self.run_install(self.answers())
+        text = self.plist().read_text()
+        self.assertIn(f"check with  {sys.executable} -c", text)
+        self.assertIn(f"<string>{sys.executable}</string>", text)
+        data = plistlib.loads(text.encode())  # strict XML: no "--" inside a comment
+        self.assertEqual(data["ProgramArguments"][0], sys.executable)
+
+    def test_first_install_into_the_clone_counts_template_files(self):
+        clone = self.tmp / "clone"
+        for d in ("scripts", "templates", "tests"):
+            shutil.copytree(ROOT / d, clone / d, ignore=shutil.ignore_patterns("__pycache__"))
+        for f in ("requirements.txt", "requirements-dev.txt"):
+            shutil.copy(ROOT / f, clone / f)
+        a = self.tmp / "a.yaml"
+        a.write_text(yaml.safe_dump(self.answers(projects=[])))
+        r = subprocess.run([sys.executable, "scripts/install.py", "--answers", str(a), "--lang", "en"], cwd=clone,
+                           capture_output=True, text=True, timeout=120, env={**os.environ, "HOME": str(self.home)})
+        self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr)
+        self.assertRegex(r.stdout, r"created:  \d+ file\(s\); template files \d+ \(as they are\); unchanged 0;")
+
+    def test_queue_steps_follow_the_report_language(self):
+        self.run_install(self.answers(language="Korean"))
+        items = {i["id"].rsplit("_", 1)[0]: i for i in yaml.safe_load(self.read("config/owner_action_queue.yaml"))}
+        self.assertTrue(items["setup_telegram"]["prep"][0].startswith("텔레그램:"), items["setup_telegram"]["prep"])
+        self.assertIn("허용 목록", items["confirm_allowlist"]["prep"][1])
+
+    def test_pytest_line_only_with_verbose(self):
+        self.run_install(self.answers())
+        rep, text = self.doctor()
+        self.assertNotIn("pytest", text)
+        rep, text = self.doctor(verbose=True)
+        self.assertIn("pytest", text)
+
+    def test_help_shows_the_answers_format(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            install.main(["--help"])
+        self.assertIn("ANSWERS (YAML", out.getvalue())
+        self.assertIn("config/install_answers.yaml", out.getvalue())
+        self.assertIn("allow_missing", out.getvalue())
+
+    def test_default_delivery_is_none(self):
+        a = self.answers()
+        del a["messenger"]
+        rc, out = self.run_install(a)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(yaml.safe_load(self.read("config/report_daemon.yaml"))["delivery"], "none")
+        self.assertEqual(yaml.safe_load((ROOT / "templates" / "report_daemon.yaml").read_text())["delivery"], "none")
 
 
 class ReviewFindings(Base):
@@ -774,7 +1040,7 @@ class ReviewFindings(Base):
             rc, out, asked = interactive(self, ["2"])
         self.assertEqual(rc, 0, out)
         cfg = yaml.safe_load(self.read("config/report_daemon.yaml"))
-        self.assertEqual((cfg["timezone"], cfg["report_times"], cfg["delivery"]), ("UTC", ["08:00", "20:00"], "telegram"))
+        self.assertEqual((cfg["timezone"], cfg["report_times"], cfg["delivery"]), ("UTC", ["08:00", "20:00"], "none"))
 
     def test_same_delivery_again_does_not_churn_the_queue(self):
         self.run_install(self.answers(messenger="none"))
@@ -821,6 +1087,28 @@ class Docs(unittest.TestCase):
         self.assertIn(f"{n} questions ({k} more for each project folder you add), about {m} minutes",
                       (ROOT / "README.md").read_text())
         self.assertIn(f"질문 {n}개(프로젝트 폴더를 추가하면 하나당 {k}개 더), 약 {m}분", (ROOT / "README.ko.md").read_text())
+
+    def test_readmes_state_what_the_installer_does(self):
+        """REPORT3 K1, K6, B-1..B-3, proposal 15: the README promises what the code does, in both languages."""
+        en = (ROOT / "README.md").read_text()
+        ko = (ROOT / "README.ko.md").read_text()
+        for text, phrases in (
+            (en, ["These four lines do not yet bring tomorrow's report by themselves",
+                  "keeps the default `none`", "`config/install_answers.yaml`",
+                  "`--answers` counts only the paths listed under `allow_missing` as checked",
+                  "stops before it writes any file", "also when it says\n   `NOT COMPLETE`",
+                  "(whatever the STATUS\nline says)", "Every report is also saved as a file under",
+                  "Without any\nproject there is nothing to protect yet", "`launchctl` and `systemctl`"]),
+            (ko, ["이 네 줄만으로는 내일 아침 보고가 오지 않는다", "기본값 `none`", "`config/install_answers.yaml`",
+                  "`--answers` 는 `allow_missing` 에\n적은 경로만 확인한 것으로 본다", "파일을 하나도 쓰지 않고 멈춘다",
+                  "`NOT COMPLETE` 여도 출력한다", "(STATUS 줄과 무관하게)", "언제나 `state/report_daemon/reports/`",
+                  "프로젝트가 하나도 없으면 아직 보호할 것이 없으므로", "`launchctl`·`systemctl`"])):
+            for ph in phrases:
+                self.assertIn(ph, text)
+        skill = (ROOT / ".agents" / "skills" / "c-level-agent-os" / "SKILL.md").read_text()
+        self.assertIn("STOPPED: no file was written", skill)
+        self.assertIn("counts only the paths under `allow_missing` as checked", skill)
+        self.assertIn("Messenger [none]", skill)
 
     def test_pip_install_hides_the_upgrade_notice(self):
         out = io.StringIO()

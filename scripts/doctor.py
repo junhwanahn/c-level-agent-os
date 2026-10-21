@@ -4,16 +4,19 @@
   python3 scripts/doctor.py                  # check the CEO project this script is in
   python3 scripts/doctor.py --root DIR       # check another CEO project
   python3 scripts/doctor.py --check-login    # also send Claude one short message (asks first; --yes skips that)
+  python3 scripts/doctor.py --verbose        # also the optional checks (pytest)
 
-One line per check:  ✓ ok   ⚠ works, but read it   ✗ fix it before relying on the setup.
+One line per check:  ✓ ok   ℹ for your information   ⚠ works, but read it   ✗ fix it before relying on the setup.
 Exit code 1 when there is at least one ✗.
 
 What it checks: Python and PyYAML, the claude CLI (absolute path, the flags the runner and the daemon
 pass, and that it is signed in: `claude auth status`), placeholders left in the installed files ({{...}} and
 //ABSOLUTE/PATH/TO), every project agent's folder, handoff file and protected zone (denied path rules must be
-absolute; a missing path is a warning), template example items left in the queue, the report daemon config
-(timezone, report times, queue, prompt, Telegram variables), pytest (optional), the rendered service file
-and the registered copy (Telegram variables present when delivery is telegram, same as the rendered file).
+absolute; a path that does not exist is a failure unless the agent lists it under allow_missing, because a typo
+leaves the real folder unprotected), the live-service deny rules, template example items left in the queue, the
+report daemon config (timezone, report times, queue, prompt), the rendered service file and the registered copy
+(same as the rendered file; with delivery telegram, real Telegram values in the registered service definition,
+not the REPLACE_WITH_ placeholders), pytest (only with --verbose).
 It reads files and runs `claude --help` and `claude auth status`; it calls a model only with --check-login
 and your yes, never prints a secret, and changes nothing except creating the daemon's log directory.
 Dependencies: Python 3.9+; the PyYAML checks are skipped (and reported) when PyYAML is missing.
@@ -48,6 +51,10 @@ REQUIRED_FILES = ("CLAUDE.md", "HANDOFF.md", "config/owner_action_queue.yaml", "
                   "config/access_control.yaml", "scripts/logic_agent.py", "scripts/report_daemon.py")
 REQUIRED_DIRS = (".claude/agents", "advisory_drafts/reviews")
 _RULE = re.compile(r"^(\w+)\((.*)\)$")
+# the Telegram values a template leaves for the owner to replace (plist: REPLACE_WITH_..., Linux env line: PASTE_...)
+SECRET_PLACEHOLDERS = ("REPLACE_WITH_", "PASTE_TOKEN", "PASTE_CHAT_ID")
+TG_KEYS = ("REPORT_TELEGRAM_TOKEN", "REPORT_TELEGRAM_CHAT_ID")
+LIVE_TOOLS = ("launchctl", "systemctl")  # service managers whose commands naming a live service are denied
 _GLOB = re.compile(r"[*?\[]")
 
 
@@ -60,10 +67,10 @@ class Report:
         self.login: Optional[bool] = None  # True signed in, False not signed in, None not known
         enc = getattr(self.out, "encoding", None) or "utf-8"
         try:
-            "✓⚠✗".encode(enc)
-            self.sym = {"ok": "✓", "warn": "⚠", "fail": "✗"}
+            "✓ℹ⚠✗".encode(enc)
+            self.sym = {"ok": "✓", "info": "ℹ", "warn": "⚠", "fail": "✗"}
         except (UnicodeEncodeError, LookupError):
-            self.sym = {"ok": "OK  ", "warn": "WARN", "fail": "FAIL"}
+            self.sym = {"ok": "OK  ", "info": "INFO", "warn": "WARN", "fail": "FAIL"}
 
     def add(self, level: str, msg: str) -> None:
         self.rows.append((level, msg))
@@ -71,6 +78,9 @@ class Report:
 
     def ok(self, msg):
         self.add("ok", msg)
+
+    def info(self, msg):
+        self.add("info", msg)
 
     def warn(self, msg):
         self.add("warn", msg)
@@ -343,6 +353,10 @@ def check_claude(rep: Report, root: Path, yaml, login: bool = False, consent=Non
     else:
         rep.warn(f"could not check the claude sign-in without a model call ({detail}): "
                  f"python3 scripts/doctor.py --check-login sends one short message after asking you")
+    if login and state is False:
+        rep.info("--check-login skipped: claude is not signed in (see the sign-in failure above), so a test "
+                 "message would only fail. Sign in first, then run python3 scripts/doctor.py --check-login again")
+        return
     if login:
         ask = consent or (lambda: input("This sends Claude one short message (\"" + LOGIN_PROMPT + "\"); it uses a "
                                         "small part of your plan. Continue? [y/N]: ").strip().lower() in ("y", "yes"))
@@ -385,10 +399,12 @@ def check_registry(rep: Report, root: Path, yaml) -> list:
     for r in ((reg.get("defaults") or {}).get("denied_tools") or []):
         if PATH_MARK in str(r) or "{{" in str(r):
             rep.fail(f"defaults.denied_tools: placeholder rule protects nothing: {r}")
+        elif is_live_rule(str(r)):
+            protected.append(str(r))
     agents = reg.get("agents") or {}
     if not agents:
-        rep.warn("no project agents registered: the CEO works alone until you add one "
-                 "(re-run install.py, or edit config/logic_agents.yaml)")
+        rep.info("no project agents registered: the CEO works alone until you add one. The protected zone is asked "
+                 "when you add a project (run python3 scripts/install.py again and choose 2)")
     for name, a in agents.items():
         a = a or {}
         mode = a.get("mode", "headless")
@@ -405,6 +421,8 @@ def check_registry(rep: Report, root: Path, yaml) -> list:
             rep.warn(f"agent {name}: handoff file not found: {handoff} (create it; the agent reads it first)")
         denied = [str(r) for r in (a.get("denied_tools") or [])]
         allowed = [str(r) for r in (a.get("allowed_tools") or [])]
+        later = a.get("allow_missing")  # denied rules the owner said may not exist yet
+        later = True if later is True else {str(x) for x in (later or [])} if isinstance(later, list) else set()
         path_rules = 0
         for kind, rules in (("denied", denied), ("allowed", allowed)):
             for r in rules:
@@ -422,8 +440,17 @@ def check_registry(rep: Report, root: Path, yaml) -> list:
                     if kind == "denied":
                         path_rules += tool in ("Edit", "Read")
                         protected.append(r)
-                    if not Path(glob_base(abs_path)).exists():
-                        rep.warn(f"agent {name}: {kind} rule points to a path that does not exist (yet): {r}")
+                    if Path(glob_base(abs_path)).exists():
+                        continue
+                    if kind == "denied" and not (later is True or r in later):
+                        rep.fail(f"agent {name}: protected path does not exist: {r}. A typo leaves the real files "
+                                 f"unprotected: fix the path (run python3 scripts/install.py again and choose 2), or, "
+                                 f"only if it will be created later, list the rule under allow_missing for {name} in "
+                                 f"config/logic_agents.yaml")
+                        problems += 1
+                    else:
+                        why = " (allow_missing: the owner said it comes later)" if kind == "denied" else ""
+                        rep.warn(f"agent {name}: {kind} rule points to a path that does not exist yet{why}: {r}")
         if path_rules == 0 and not any(PATH_MARK in r for r in denied):
             if str(a.get("protected_zone") or "").strip().lower() == "none":
                 rep.warn(f"agent {name}: NO PROTECTED ZONE (protected_zone: none, confirmed by the owner): "
@@ -438,6 +465,11 @@ def check_registry(rep: Report, root: Path, yaml) -> list:
     return protected
 
 
+def is_live_rule(rule: str) -> bool:
+    """Bash(launchctl *name*) or Bash(systemctl *name*): a live service the agents must not control."""
+    return bool(re.match(rf"^Bash\(({'|'.join(LIVE_TOOLS)}) \*.+\*\)$", str(rule).strip()))
+
+
 def check_ceo_settings(rep: Report, root: Path, protected: list) -> None:
     if not protected:
         return
@@ -446,12 +478,13 @@ def check_ceo_settings(rep: Report, root: Path, protected: list) -> None:
         deny = set((json.loads(p.read_text()).get("permissions") or {}).get("deny") or [])
     except (OSError, ValueError, AttributeError):
         deny = set()
-    missing = [r for r in protected if r.startswith(("Edit(", "Read(")) and r not in deny]
+    missing = [r for r in protected if (r.startswith(("Edit(", "Read(")) or is_live_rule(r)) and r not in deny]
     if missing:
-        rep.warn(f"the CEO session itself is not denied {len(missing)} protected path rule(s) (first: {missing[0]}): "
+        rep.warn(f"the CEO session itself is not denied {len(missing)} protected rule(s) (first: {missing[0]}): "
                  f"add them to permissions.deny in .claude/settings.json (install.py does this)")
     else:
-        rep.ok(f"the CEO session denies the same protected paths (.claude/settings.json, {len(protected)} rule(s))")
+        rep.ok(f"the CEO session denies the same protected paths and live services (.claude/settings.json, "
+               f"{len(protected)} rule(s))")
 
 
 def check_queue(rep: Report, root: Path, yaml) -> None:
@@ -483,17 +516,23 @@ def check_report_config(rep: Report, root: Path) -> None:
         return
     try:
         rd = _load_module(script, "_doctor_report_daemon")
-        rows = rd.check_config(cfg, env_required=False)
+        try:  # the Telegram values are checked where the service reads them (check_service), not in this shell
+            rows = rd.check_config(cfg, env_required=False, telegram_env=False)
+        except TypeError:  # an older report_daemon.py
+            rows = rd.check_config(cfg, env_required=False)
     except Exception as e:  # a broken install must still get a readable line
         rep.fail(f"report daemon check could not run: {type(e).__name__}: {e}")
         return
     for level, msg in rows:
         if msg.startswith(("claude_cmd", "config ")):
             continue  # the claude check above covers it
-        {"ok": rep.ok, "warn": rep.warn, "error": rep.fail}.get(level, rep.warn)(f"report daemon: {msg}")
+        {"ok": rep.ok, "info": rep.info, "warn": rep.warn, "error": rep.fail}.get(level, rep.warn)(
+            f"report daemon: {msg}")
 
 
-def check_pytest(rep: Report) -> None:
+def check_pytest(rep: Report, verbose: bool = False) -> None:
+    if not verbose:  # optional, only for the tests: not worth a line in every check
+        return
     if importlib.util.find_spec("pytest"):
         rep.ok("pytest installed (optional): python3 -m pytest tests -q")
     else:
@@ -526,14 +565,65 @@ def service_differs(rendered: str, installed: str) -> bool:
     return norm(rendered) != norm(installed)
 
 
+def telegram_values(installed: Path, kind: str, unit_text: str = "") -> tuple:
+    """({key: value} the registered service gives the daemon, problem or None). Values are never printed.
+    launchd: EnvironmentVariables of the installed plist. systemd: the unit's EnvironmentFile."""
+    if kind == "launchd":  # read like launchd does: the <key>/<string> pairs (plutil also accepts what XML refuses)
+        from xml.sax.saxutils import unescape
+        text = installed.read_text(errors="replace")
+        vals = {}
+        for k in TG_KEYS:
+            m = re.search(rf"<key>{k}</key>\s*<string>([^<]*)</string>", text)
+            if m:
+                vals[k] = unescape(m.group(1)).strip()
+        return vals, None
+    m = re.search(r"^EnvironmentFile=-?(\S+)", unit_text, re.M)
+    path = Path(os.path.expanduser(m.group(1).replace("%h", str(Path.home())))) if m else None
+    if path is None or not path.is_file():
+        return {}, f"{path or 'the EnvironmentFile'} is missing"
+    vals = {}
+    for line in path.read_text(errors="replace").splitlines():
+        k, sep, v = line.strip().partition("=")
+        if sep and k.strip() in TG_KEYS:
+            vals[k.strip()] = v.strip().strip("'\"")
+    return vals, None
+
+
+def check_telegram_values(rep: Report, where: str, vals: dict, problem: Optional[str], fix: str,
+                          missing_fails: bool = True) -> None:
+    """A placeholder always fails. Missing values fail where the service reads them (missing_fails), and only
+    warn for this shell's environment, which may not be the one the daemon runs with."""
+    if problem:
+        rep.fail(f"delivery is telegram but the Telegram values cannot be read: {problem}. {fix}")
+        return
+    missing = [k for k in TG_KEYS if not vals.get(k)]
+    placeholder = [k for k in TG_KEYS if any(m in vals.get(k, "") for m in SECRET_PLACEHOLDERS)]
+    if missing:
+        (rep.fail if missing_fails else rep.warn)(
+            f"delivery is telegram but {where} has no {' or '.join(missing)}, so no report would be sent. {fix}")
+    elif placeholder:
+        rep.fail(f"the Telegram values in {where} are still the placeholders (REPLACE_WITH_... / PASTE_...), so no "
+                 f"report is sent (the daemon records that instead of sending). {fix}")
+    else:
+        rep.ok(f"Telegram values set in {where} (values not shown)")
+        if not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", vals[TG_KEYS[0]]):
+            rep.warn(f"{TG_KEYS[0]} in {where} does not look like a bot token (<digits>:<secret>)")
+        if not re.match(r"^(-?\d+|@\w+)$", vals[TG_KEYS[1]]):
+            rep.warn(f"{TG_KEYS[1]} in {where} does not look like a chat id (a number, or @channel)")
+
+
 def check_service(rep: Report, root: Path, delivery: Optional[str] = None) -> None:
     sdir = root / "service"
     files = sorted(sdir.glob("*.plist")) + sorted(sdir.glob("*.service")) if sdir.is_dir() else []
+    telegram = delivery == "telegram"
     if not files:
         rep.warn("no rendered service file in service/: run python3 scripts/install.py --render-service "
                  "(it writes one from config/ and prints the commands that register it)")
+        if telegram:  # the daemon then runs under whatever you use, with that environment
+            env = {k: os.environ.get(k, "").strip() for k in TG_KEYS}
+            check_telegram_values(rep, "this shell's environment", env, None,
+                                  "Set them in the environment the daemon runs with", missing_fails=False)
         return
-    telegram = delivery == "telegram"
     for f in files:
         kind = "launchd" if f.suffix == ".plist" else "systemd"
         text = f.read_text(errors="replace")
@@ -558,16 +648,25 @@ def check_service(rep: Report, root: Path, delivery: Optional[str] = None) -> No
         installed = installed_service_path(f, kind)
         if not installed.is_file():
             rep.warn(f"service not registered yet ({installed} missing): paste the commands from the install "
-                     f"summary (python3 scripts/install.py --render-service prints them again)")
+                     f"summary (python3 scripts/install.py --render-service prints them again)"
+                     + ("; the Telegram values go into the registered copy then (queue item setup_telegram_...)"
+                        if telegram else ""))
             continue
         itext = installed.read_text(errors="replace")
         if kind == "launchd" and telegram and "REPORT_TELEGRAM_TOKEN" not in itext:
             rep.fail(f"the registered copy {installed} has no Telegram variables, so no report is sent: re-register "
                      f"it (python3 scripts/install.py --render-service prints the commands)")
-        elif kind == "launchd" and telegram and "REPLACE_WITH_" in itext:
-            rep.warn(f"the registered copy {installed} still has REPLACE_WITH_...: put the bot token and chat id "
-                     f"there, save, then bootout and bootstrap it again (the owner action in the queue)")
-        elif service_differs(text, itext):
+            continue
+        if telegram:
+            vals, problem = telegram_values(installed, kind, itext)
+            fix = (f"Put the bot token and chat id into {installed} (queue item setup_telegram_...), save, then "
+                   f"launchctl bootout and bootstrap it again (python3 scripts/install.py --render-service prints "
+                   f"the lines)" if kind == "launchd" else
+                   "Write the real token and chat id into ~/.config/report-daemon/env (the line in the install "
+                   "summary), then systemctl --user restart report-daemon")
+            check_telegram_values(rep, f"the registered copy {installed}" if kind == "launchd"
+                                  else "the service's EnvironmentFile", vals, problem, fix)
+        if service_differs(text, itext):
             rep.warn(f"the registered copy {installed} differs from {rel} (an older install?): re-register it "
                      f"(python3 scripts/install.py --render-service prints the commands)")
         else:
@@ -575,8 +674,8 @@ def check_service(rep: Report, root: Path, delivery: Optional[str] = None) -> No
 
 
 # ---------------------------------------------------------------- main
-def run(root, out=None, login: bool = False, consent=None) -> Report:
-    """login=True: also the --check-login model call, after consent() says yes."""
+def run(root, out=None, login: bool = False, consent=None, verbose: bool = False) -> Report:
+    """login=True: also the --check-login model call, after consent() says yes. verbose: the optional checks."""
     root = Path(root).expanduser().resolve()
     rep = Report(out)
     print(f"doctor: {root}", file=rep.out)
@@ -593,8 +692,8 @@ def run(root, out=None, login: bool = False, consent=None) -> Report:
         check_report_config(rep, root)
         cfg, _ = _load_yaml(yaml, root / "config" / "report_daemon.yaml")
         if isinstance(cfg, dict):
-            delivery = str(cfg.get("delivery") or "telegram").strip().lower()
-    check_pytest(rep)
+            delivery = str(cfg.get("delivery") or "none").strip().lower()
+    check_pytest(rep, verbose)
     check_service(rep, root, delivery)
     print(f"doctor: {rep.count('ok')} ok, {rep.count('warn')} warning(s), {rep.count('fail')} failure(s)",
           file=rep.out)
@@ -610,9 +709,10 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--check-login", action="store_true",
                     help="also send Claude one short test message to prove the sign-in works (asks first)")
     ap.add_argument("--yes", action="store_true", help="with --check-login: do not ask (the owner already agreed)")
+    ap.add_argument("--verbose", action="store_true", help="also the optional checks (pytest)")
     a = ap.parse_args(argv)
     consent = (lambda: True) if a.yes else None
-    return 1 if run(a.root, login=a.check_login, consent=consent).failures else 0
+    return 1 if run(a.root, login=a.check_login, consent=consent, verbose=a.verbose).failures else 0
 
 
 if __name__ == "__main__":
