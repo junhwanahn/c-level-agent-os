@@ -48,6 +48,8 @@ if [ "$1" = "--help" ]; then
   echo "  -p, --print   --output-format <format>   --model <model>   --append-system-prompt <prompt>"
   echo "  -r, --resume [value]   --allowedTools, --allowed-tools <tools...>   --disallowedTools <tools...>"
   echo "  --tools <tools...>   --effort <level>"
+  echo "Commands:"
+  __HELP_AUTH__
   exit 0
 fi
 if [ "$1" = "auth" ]; then
@@ -63,7 +65,8 @@ AUTH_OLD = """echo "error: unknown command 'auth'" >&2; exit 1"""
 
 def write_stub(path: Path, auth: str = AUTH_IN) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(STUB.replace("__AUTH__", auth))
+    listed = 'echo "  auth   Manage authentication"' if auth != AUTH_OLD else 'echo "  doctor   Check health"'
+    path.write_text(STUB.replace("__AUTH__", auth).replace("__HELP_AUTH__", listed))
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     return path
 
@@ -694,6 +697,98 @@ class ServiceChecks(Base):
             items = yaml.safe_load(self.read("config/owner_action_queue.yaml"))
             reg = next(i for i in items if i["id"].startswith("register_report_service_"))
             self.assertIn(f"cd {self.dest}", reg["prep"])
+
+
+class ReviewFindings(Base):
+    """Edge cases found in review: hand-edited files and odd defaults must not break or loop."""
+
+    def test_drop_keeps_the_queue_valid_and_touches_only_the_item_status(self):
+        text = ("# mine\n- id: setup_telegram_20261019\n  meta:\n    status: open\n  status: \"open\"\n"
+                "- id: next_item\n  status: open  # keep me\n- id: setup_telegram_20261020\n"
+                "  status: open  # note\n")
+        out, dropped = install.queue_drop_open(text, "setup_telegram_")
+        data = yaml.safe_load(out)
+        self.assertEqual([i["status"] for i in data], ["dropped", "open", "dropped"])
+        self.assertEqual(data[0]["meta"]["status"], "open")
+        self.assertIn("status: dropped  # note", out)
+        self.assertEqual(dropped, ["setup_telegram_20261019", "setup_telegram_20261020"])
+
+    def test_comment_after_an_example_item_is_kept(self):
+        text = ("- id: send_partner_reply_0115\n  example: true\n  status: open\n\n# --- my items below ---\n"
+                "- id: mine\n  status: open\n")
+        out, removed = install.remove_example_blocks(text)
+        self.assertEqual(removed, ["send_partner_reply_0115"])
+        self.assertIn("# --- my items below ---", out)
+        self.assertEqual([i["id"] for i in yaml.safe_load(out)], ["mine"])
+
+    def test_flow_style_queue_is_left_alone_with_a_note(self):
+        (self.dest / "config").mkdir(parents=True)
+        q = self.dest / "config" / "owner_action_queue.yaml"
+        q.write_text("[{id: a, owner: ceo, title: x, status: open, due: '2026-10-30'}]\n")
+        rc, out = self.run_install(self.answers())
+        self.assertIn("queue: could not append", out)
+        self.assertEqual([i["id"] for i in yaml.safe_load(q.read_text())], ["a"])
+
+    def test_schedule_edits_block_and_multiline_lists_or_refuses(self):
+        self.run_install(self.answers())
+        cfg = self.dest / "config" / "report_daemon.yaml"
+        base = cfg.read_text()
+        f = self.tmp / "s.yaml"
+        f.write_text(yaml.safe_dump({"report_times": ["09:00"]}))
+        for form in ('report_times:\n  - "08:00"\n  - "20:00"\n', 'report_times: [\n  "08:00",\n  "20:00"]\n'):
+            cfg.write_text(re.sub(r"(?m)^report_times:.*\n", lambda m: form, base, count=1))
+            rc, out = self.run_main(["--reconfigure", "schedule", "--answers", str(f)])
+            self.assertEqual(rc, 0, out)
+            data = yaml.safe_load(cfg.read_text())
+            self.assertEqual(data["report_times"], ["09:00"])
+            self.assertEqual(data["poll_seconds"], 60)
+        cfg.write_text(base + "broken: [\n")
+        before = cfg.read_text()
+        rc, _ = self.run_main(["--reconfigure", "schedule", "--answers", str(f)])
+        self.assertEqual(rc, 2)
+        self.assertEqual(cfg.read_text(), before)  # nothing written
+
+    def test_null_or_empty_protected_entries_are_no_answer(self):
+        for value in ([None], [""], ["  "]):
+            a = self.answers()
+            a["projects"][0]["protected"] = value
+            rc, out = self.run_install(a, "--force")
+            self.assertEqual(rc, 1, f"protected={value!r}")
+            self.assertIn("protected zone not answered", out)
+
+    def test_kept_registry_with_another_path_is_a_difference(self):
+        self.run_install(self.answers())
+        reg = self.dest / "config" / "logic_agents.yaml"
+        reg.write_text(reg.read_text().replace(f'path: "{self.shop}"', f'path: "{self.notes}"', 1))
+        rc, out = self.run_install(self.answers())
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"shop points to {self.notes}; you answered {self.shop}", out)
+
+    def test_an_invalid_default_still_lets_enter_through(self):
+        self.run_install(self.answers(roles=["cto"]))
+        prev = self.dest / "config" / "install_answers.yaml"
+        rec = yaml.safe_load(prev.read_text())
+        rec.update(timezone="Nope/X", roles=["xx"], messenger="email", report_times=["25:00"])
+        prev.write_text(yaml.safe_dump(rec))
+        with mock.patch.dict(os.environ, {"TZ": "Mars/Base"}):
+            rc, out, asked = interactive(self, ["2"])
+        self.assertEqual(rc, 0, out)
+        cfg = yaml.safe_load(self.read("config/report_daemon.yaml"))
+        self.assertEqual((cfg["timezone"], cfg["report_times"], cfg["delivery"]), ("UTC", ["08:00", "20:00"], "telegram"))
+
+    def test_same_delivery_again_does_not_churn_the_queue(self):
+        self.run_install(self.answers(messenger="none"))
+        self.run_main(["--reconfigure", "delivery", "--to", "telegram"])
+        ids = self.queue_ids()
+        rc, out = self.run_main(["--reconfigure", "delivery", "--to", "telegram"])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.queue_ids(), ids)
+
+    def test_old_cli_is_never_asked_auth_status(self):
+        write_stub(self.stub, AUTH_OLD)
+        self.run_install(self.answers())
+        calls = (self.stub.parent / "calls.log").read_text().splitlines()
+        self.assertFalse([c for c in calls if c.startswith("auth")], calls)
 
 
 @unittest.skipUnless((ROOT / "docs").is_dir(), "template repository only")

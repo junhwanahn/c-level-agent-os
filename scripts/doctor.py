@@ -160,22 +160,34 @@ def cli_env() -> dict:
     return {k: v for k, v in os.environ.items() if k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE_")}
 
 
-def missing_flags(claude: str, flags) -> Optional[list]:
-    """Flags absent from `claude --help`, or None when the help text cannot be read."""
+def cli_help(claude: str) -> Optional[str]:
+    """The text of `claude --help`, or None when it cannot be read."""
     try:
-        r = subprocess.run([claude, "--help"], capture_output=True, text=True, timeout=30, env=cli_env())
+        r = subprocess.run([claude, "--help"], capture_output=True, text=True, timeout=30, env=cli_env(),
+                           stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return None
     text = (r.stdout or "") + (r.stderr or "")
-    if "--" not in text:
+    return text if "--" in text else None
+
+
+def missing_flags(claude: str, flags, text: Optional[str] = None) -> Optional[list]:
+    """Flags absent from `claude --help`, or None when the help text cannot be read."""
+    text = text if text is not None else cli_help(claude)
+    if text is None:
         return None
     return [f for f in flags if not re.search(rf"(^|[\s,]){re.escape(f)}\b", text)]
 
 
-def login_status(claude: str) -> tuple:
-    """(True / False / None, detail) from `claude auth status`, which makes no model call. None = cannot tell."""
+def login_status(claude: str, help_text: Optional[str] = None) -> tuple:
+    """(True / False / None, detail) from `claude auth status`, which makes no model call. None = cannot tell.
+    Run only when `claude --help` lists an `auth` command: an older CLI could read the words as a prompt."""
+    help_text = help_text if help_text is not None else cli_help(claude)
+    if not help_text or not re.search(r"(?m)^\s+auth\b", help_text):
+        return None, "this claude version has no `claude auth status`"
     try:
-        r = subprocess.run([claude, "auth", "status"], capture_output=True, text=True, timeout=30, env=cli_env())
+        r = subprocess.run([claude, "auth", "status"], capture_output=True, text=True, timeout=30, env=cli_env(),
+                           stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"`claude auth status` did not answer ({type(e).__name__})"
     out = (r.stdout or "").strip()
@@ -311,7 +323,8 @@ def check_claude(rep: Report, root: Path, yaml, login: bool = False, consent=Non
         rep.warn(f"claude_cmd in config/report_daemon.yaml is '{configured or 'claude'}', not an absolute path: a "
                  f"service does not use your shell's PATH. Set claude_cmd: {resolved}")
     flags = list(CLI_FLAGS) + (["--effort"] if effort else [])
-    missing = missing_flags(resolved, flags)
+    help_text = cli_help(resolved)
+    missing = missing_flags(resolved, flags, help_text)
     if missing is None:
         rep.warn("could not read `claude --help`; check the flags in docs/04 against your CLI by hand")
     elif missing:
@@ -320,7 +333,7 @@ def check_claude(rep: Report, root: Path, yaml, login: bool = False, consent=Non
                  f"update Claude Code (claude update){hint}")
     else:
         rep.ok("claude CLI lists every flag the runner and the daemon pass")
-    state, detail = login_status(resolved)
+    state, detail = login_status(resolved, help_text)
     rep.login = state
     if state is True:
         rep.ok(f"claude is signed in ({detail or 'auth status'})")

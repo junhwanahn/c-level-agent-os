@@ -440,9 +440,11 @@ def _abs(dest: Path, raw) -> Path:
 
 
 def _explicit_none(entries) -> bool:
+    """Only the written word counts: protected: none (or [none]). A null or empty value never does."""
     if isinstance(entries, str):
         return entries.strip().lower() in NONE_WORDS
-    return isinstance(entries, list) and len(entries) == 1 and str(entries[0]).strip().lower() in NONE_WORDS
+    return (isinstance(entries, list) and len(entries) == 1 and isinstance(entries[0], str)
+            and entries[0].strip().lower() in NONE_WORDS)
 
 
 def normalize(raw: dict, dest: Path, today: date) -> tuple:
@@ -521,6 +523,8 @@ def normalize(raw: dict, dest: Path, today: date) -> tuple:
                 "mode": mode, "handoff": str(p.get("handoff") or "HANDOFF.md"), "protected_raw": [],
                 "protected": [], "rules": [], "allow_missing": allow if (allow_all or allow_set) else None}
         entries = p.get("protected")
+        if isinstance(entries, list):  # null or empty items are no answer (an empty path would protect the root)
+            entries = [e for e in entries if e is not None and str(e).strip()]
         if _explicit_none(entries) or (p.get("no_protected_zone") is True and not entries):
             proj["state"] = "none"
         elif entries:
@@ -589,7 +593,11 @@ class Prompter:
             print("\n" + self.t("closed"), file=self.out)
             raise SystemExit(2)
 
-    def ask(self, key: str, default="", validate: Optional[Callable] = None, **kw) -> str:
+    def ask(self, key: str, default="", validate: Optional[Callable] = None, fallback: str = "", **kw) -> str:
+        """A default that fails validation (an odd TZ variable, a hand-edited answers file) is replaced by
+        `fallback`, so Enter always leads out of the question."""
+        if validate and default not in ("", None) and validate(str(default)):
+            default = fallback
         while True:
             suffix = f" [{default}]" if default not in ("", None) else ""
             val = self._read(f"{self.t(key, **kw)}{suffix}: ").strip() or str(default or "")
@@ -685,15 +693,19 @@ def collect_interactive(pr: Prompter, dest: Path, prev: dict) -> dict:
                                    or "a one-person company run with an AI executive team"),
         "owner": pr.ask("owner", default=d.get("owner") or git_user_name() or getpass.getuser()),
         "language": pr.ask("language", default=d.get("language") or ("Korean" if pr.lang == "ko" else "English")),
-        "timezone": pr.ask("timezone", default=d.get("timezone") or detect_timezone(),
+        "timezone": pr.ask("timezone", default=d.get("timezone") or detect_timezone(), fallback="UTC",
                            validate=lambda v: pr.t("err_tz", v=v) if tz_error(v) else None),
     }
     times = d.get("report_times") or ["08:00", "20:00"]
-    raw["report_times"] = pr.ask("report_times", default=", ".join(str(x) for x in times),
+    times = times if isinstance(times, list) else [times]
+    raw["report_times"] = pr.ask("report_times", default=", ".join(str(x) for x in times), fallback="08:00, 20:00",
                                  validate=lambda v: pr.t("err_times", v=v) if parse_times(v)[1] else None)
-    raw["messenger"] = pr.ask("messenger", default=d.get("messenger") or "telegram",
+    raw["messenger"] = pr.ask("messenger", default=d.get("messenger") or "telegram", fallback="telegram",
                               validate=lambda v: None if v.lower() in DELIVERIES else pr.t("err_messenger"))
-    raw["roles"] = pr.ask("roles", default=", ".join(d.get("roles") or ROLES),
+    roles = d.get("roles") or ROLES
+    raw["roles"] = pr.ask("roles", default=", ".join(str(r) for r in (roles if isinstance(roles, (list, tuple))
+                                                                        else [roles])),
+                          fallback=", ".join(ROLES),
                           validate=lambda v: None if all(r in ROLES for r in re.split(r"[,\s]+", v.lower()) if r)
                           else pr.t("err_roles"))
     raw["owner_instruction"] = pr.ask("owner_instruction", default=d.get("owner_instruction") or DEFAULT_INSTRUCTION)
@@ -931,21 +943,24 @@ def remove_example_blocks(text: str) -> tuple:
         m = re.match(r"- id:\s*['\"]?([^'\"\n]+)", part)
         if m and (re.search(r"(?m)^\s+example:\s*true\s*$", part) or m.group(1).strip() in doctor.TEMPLATE_EXAMPLE_IDS):
             removed.append(m.group(1).strip())
+            tail = re.search(r"(?m)^#", part)  # a top-level comment after the item is not part of it
+            if tail:
+                keep.append(part[tail.start():])
             continue
         keep.append(part)
     return "".join(keep), removed
 
 
 def queue_add_items(text: str, items: list) -> tuple:
-    """(new text, added ids, dropped ids). Appends each item unless an open or done item with the same id prefix
-    (everything before the date stamp) exists; a dropped one does not count. Comments are kept."""
+    """(new text, added ids, ids that could not be added). Appends each item unless an open or done item with the
+    same id prefix (everything before the date stamp) exists; a dropped one does not count. Comments are kept."""
     import yaml
     try:
         data = yaml.safe_load(text) or []
     except yaml.YAMLError:
-        return text, [], []
+        return text, [], [i["id"] for i in items]
     if not isinstance(data, list):
-        return text, [], []
+        return text, [], [i["id"] for i in items]
     ids = {str(i.get("id")) for i in data if isinstance(i, dict)}
     live = {str(i.get("id")) for i in data if isinstance(i, dict) and i.get("status") in ("open", "done")}
     new = []
@@ -961,25 +976,29 @@ def queue_add_items(text: str, items: list) -> tuple:
     if not new:
         return text, [], []
     dump = yaml.safe_dump(new, sort_keys=False, allow_unicode=True, width=1000)
-    if re.search(r"(?m)^\[\]\s*$", text):
-        out = re.sub(r"(?m)^\[\]\s*$", lambda m: dump.rstrip("\n"), text, count=1)
+    if re.search(r"(?m)^\[\][ \t]*$", text):
+        out = re.sub(r"(?m)^\[\][ \t]*$", lambda m: dump.rstrip("\n"), text, count=1)
     else:
         out = text.rstrip("\n") + "\n" + dump
     try:
-        ok = isinstance(yaml.safe_load(out), list)
+        after = yaml.safe_load(out)
+        ok = isinstance(after, list) and len(after) == len(data) + len(new)
     except yaml.YAMLError:
         ok = False
-    return (out, [i["id"] for i in new], []) if ok else (text, [], [])
+    return (out, [i["id"] for i in new], []) if ok else (text, [], [i["id"] for i in new])
 
 
 def queue_drop_open(text: str, prefix: str) -> tuple:
-    """(new text, ids): set status: dropped on open items whose id starts with prefix."""
+    """(new text, ids): set status: dropped on open items whose id starts with prefix. Only the item's own
+    top-level status line changes (its indent is that of the item's first key); a trailing comment stays."""
     parts = re.split(r"(?m)^(?=- )", text)
     out, dropped = [], []
     for part in parts:
         m = re.match(r"- id:\s*['\"]?([^'\"\n]+)", part)
-        if m and m.group(1).strip().startswith(prefix):
-            new, n = re.subn(r"(?m)^(\s+status:\s*)['\"]?open['\"]?\s*$", r"\1dropped", part, count=1)
+        key_indent = re.search(r"(?m)^( +)\w+:", part)
+        if m and key_indent and m.group(1).strip().startswith(prefix):
+            ind = re.escape(key_indent.group(1))
+            new, n = re.subn(rf"(?m)^({ind}status:[ \t]*)['\"]?open['\"]?([ \t]*(#.*)?)$", r"\1dropped\2", part, count=1)
             if n:
                 dropped.append(m.group(1).strip())
                 part = new
@@ -993,6 +1012,43 @@ def set_yaml_value(text: str, key: str, literal: str) -> str:
     if not n:
         raise ValueError(f"key {key} not found")
     return new
+
+
+def set_yaml_key(text: str, key: str, literal: str) -> str:
+    """Set a top-level key in a file the owner may have edited (block lists, multi-line flow lists, comments).
+    The result must parse, carry the new value and leave every other key as it was; otherwise ValueError and
+    nothing is written."""
+    import yaml
+    try:
+        before = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise ValueError(f"the file does not parse as YAML ({str(e).splitlines()[0]})")
+    if not isinstance(before, dict):
+        raise ValueError("the file is not a YAML mapping")
+    want = yaml.safe_load(f"{key}: {literal}")[key]
+    candidates = []
+    try:
+        candidates.append(set_yaml_value(text, key, literal))
+    except ValueError:
+        pass
+    lines = text.splitlines(keepends=True)
+    idx = next((i for i, ln in enumerate(lines) if re.match(rf"{re.escape(key)}:", ln)), None)
+    if idx is None:
+        candidates.append(text.rstrip("\n") + f"\n{key}: {literal}\n")
+    else:  # replace the key line and its continuation lines (indented, not a comment of its own)
+        j = idx + 1
+        while j < len(lines) and re.match(r"[ \t]+[^\s#]", lines[j]):
+            j += 1
+        candidates.append("".join(lines[:idx]) + f"{key}: {literal}\n" + "".join(lines[j:]))
+    rest = {k: v for k, v in before.items() if k != key}
+    for c in candidates:
+        try:
+            after = yaml.safe_load(c)
+        except yaml.YAMLError:
+            continue
+        if isinstance(after, dict) and after.get(key) == want and {k: v for k, v in after.items() if k != key} == rest:
+            return c
+    raise ValueError(f"could not change {key} in place; set it by hand: {key}: {literal}")
 
 
 def render_daemon_config(plan: dict) -> str:
@@ -1111,6 +1167,8 @@ def read_actual(dest: Path) -> dict:
                     prot.append((abs_path, Path(doctor.glob_base(abs_path)).exists()))
             projects.append({"name": str(name), "mode": str(a.get("mode") or "headless"), "protected": prot,
                              "rules": sorted(rules), "placeholder": placeholder,
+                             "path": str(doctor.resolve_agent_path(dest, a.get("path"))),
+                             "handoff": str(a.get("handoff") or "HANDOFF.md"),
                              "none": str(a.get("protected_zone") or "").strip().lower() == "none"})
     cfg = _load_yaml_file(dest / "config" / "report_daemon.yaml")
     report = None
@@ -1163,6 +1221,10 @@ def differences(plan: dict, actual: dict, service_rel: Optional[str]) -> list:
             h, w = have[name], want[name]
             if h["mode"] != w["mode"]:
                 out.append(f"config/logic_agents.yaml: {name} is mode {h['mode']}; you answered {w['mode']}")
+            if h["path"] != w["path"]:
+                out.append(f"config/logic_agents.yaml: {name} points to {h['path']}; you answered {w['path']}")
+            if h["handoff"] != w["handoff"]:
+                out.append(f"config/logic_agents.yaml: {name} reads {h['handoff']} first; you answered {w['handoff']}")
             want_rules = sorted(r for r in w["rules"] if not is_placeholder(r) and doctor.rule_path(r)[1])
             if h["rules"] != want_rules or h["none"] != (w["state"] == "none"):
                 out.append(f"config/logic_agents.yaml: the protected zone of {name} is not the one you answered")
@@ -1272,7 +1334,18 @@ def update_queue(dest: Path, w: Writer, items: list, drop_prefixes=()) -> None:
     for prefix in drop_prefixes:
         text, d = queue_drop_open(text, prefix)
         dropped += d
-    text, added, _ = queue_add_items(text, items)
+    text, added, failed = queue_add_items(text, items)
+    if failed:
+        w.notes.append(f"queue: could not append {', '.join(failed)} (the queue is not a plain YAML list of items); "
+                       f"add them by hand")
+    try:
+        import yaml
+        valid = isinstance(yaml.safe_load(text) or [], list)
+    except yaml.YAMLError:
+        valid = False
+    if not valid:  # never write a queue that no longer parses
+        w.notes.append("queue: left unchanged (an edit would not parse); remove template examples by hand")
+        return
     if text != original:
         backup = queue.with_name(f"{queue.name}.bak-{w.stamp}")
         shutil.copy2(queue, backup)
@@ -1568,7 +1641,7 @@ def reconfigure(dest: Path, item: str, pr: Optional[Prompter], to: Optional[str]
     if item == "delivery":
         new = to or raw.get("messenger")
         if new is None and pr:
-            new = pr.ask("messenger", default=cur.get("delivery") or "telegram",
+            new = pr.ask("messenger", default=cur.get("delivery") or "telegram", fallback="telegram",
                          validate=lambda v: None if v.lower() in DELIVERIES else pr.t("err_messenger"))
         if new is None:
             print(say(lang, "need_to"), file=sys.stderr)
@@ -1578,13 +1651,14 @@ def reconfigure(dest: Path, item: str, pr: Optional[Prompter], to: Optional[str]
             print(f"delivery must be telegram or none (got {new!r})", file=sys.stderr)
             return 2
         try:
-            text = set_yaml_value(text, "delivery", new)
-        except ValueError:
-            text = text.rstrip("\n") + f"\ndelivery: {new}\n"
+            text = set_yaml_key(text, "delivery", new)
+        except ValueError as e:
+            print(f"config/report_daemon.yaml: {e}", file=sys.stderr)
+            return 2
         w.write("config/report_daemon.yaml", text)
-        rel, kind, label = None, None, None
+        rel, kind, label, svc_changed = None, None, None, False
         if _need_templates(lang):
-            rel, kind, label, _ = write_service(dest, w, new)
+            rel, kind, label, svc_changed = write_service(dest, w, new)
         svc = next((s for s in read_actual(dest)["services"] if s["rel"] == rel), None)
         stamp = plan["today"].replace("-", "")
         items, drop = [], ()
@@ -1593,7 +1667,7 @@ def reconfigure(dest: Path, item: str, pr: Optional[Prompter], to: Optional[str]
             items.append(telegram_item(plan, stamp, rel))
         else:
             drop = ("setup_telegram_",)
-        if svc and svc["installed"] != "same":  # the open (re)register step must carry the new commands
+        if svc and svc_changed and svc["installed"] != "same":  # the open (re)register step needs the new commands
             registered = svc["installed"] == "differs"
             drop += ("reregister_report_service_",) if registered else ("register_report_service_",)
             items.append(register_item(plan, dest, stamp, rel, kind, label, registered=registered,
@@ -1606,10 +1680,11 @@ def reconfigure(dest: Path, item: str, pr: Optional[Prompter], to: Optional[str]
         tz = raw.get("timezone")
         times = raw.get("report_times")
         if pr and tz is None:
-            tz = pr.ask("timezone", default=cur.get("timezone") or detect_timezone(),
+            tz = pr.ask("timezone", default=cur.get("timezone") or detect_timezone(), fallback="UTC",
                         validate=lambda v: pr.t("err_tz", v=v) if tz_error(v) else None)
         if pr and times is None:
             times = pr.ask("report_times", default=", ".join(cur.get("report_times") or ["08:00", "20:00"]),
+                           fallback="08:00, 20:00",
                            validate=lambda v: pr.t("err_times", v=v) if parse_times(v)[1] else None)
         tz = str(tz or cur.get("timezone") or "")
         parsed, err = parse_times(times if times is not None else cur.get("report_times"))
@@ -1617,8 +1692,12 @@ def reconfigure(dest: Path, item: str, pr: Optional[Prompter], to: Optional[str]
             if e:
                 print(e, file=sys.stderr)
                 return 2
-        text = set_yaml_value(text, "timezone", q(tz))
-        text = set_yaml_value(text, "report_times", "[" + ", ".join(q(x) for x in parsed) + "]")
+        try:
+            text = set_yaml_key(text, "timezone", q(tz))
+            text = set_yaml_key(text, "report_times", "[" + ", ".join(q(x) for x in parsed) + "]")
+        except ValueError as e:
+            print(f"config/report_daemon.yaml: {e}", file=sys.stderr)
+            return 2
         w.write("config/report_daemon.yaml", text)
         update_answers_record(dest, {"timezone": tz, "report_times": parsed}, w)
         w.notes.insert(0, f"schedule: {', '.join(cur.get('report_times') or [])} {cur.get('timezone')} -> "
