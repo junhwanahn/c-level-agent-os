@@ -1,0 +1,36 @@
+# systemd user unit for scripts/report_daemon.py (Linux). docs/05 "Install".
+#
+# 1. Copy and edit the paths (%h = your home directory):
+#      mkdir -p ~/.config/systemd/user ~/.config/report-daemon
+#      cp templates/service/report-daemon.service ~/.config/systemd/user/
+# 2. Secrets in an env file, not in this unit and not in the YAML:
+#      printf 'REPORT_TELEGRAM_TOKEN=...\nREPORT_TELEGRAM_CHAT_ID=...\n' > ~/.config/report-daemon/env
+#      chmod 600 ~/.config/report-daemon/env
+# 3. PATH below must contain the directories of `which claude` and `which node`;
+#    systemd does not read your shell profile (nvm, pyenv, ~/.local/bin are not there by default).
+# 4. Load and start:
+#      systemctl --user daemon-reload
+#      systemctl --user enable --now report-daemon
+#      loginctl enable-linger "$USER"     # keep it running after you log out (and on a headless server)
+#
+# After editing this file:  systemctl --user daemon-reload && systemctl --user restart report-daemon
+# Status and logs:          systemctl --user status report-daemon ; journalctl --user -u report-daemon -f
+# Restart away from report times (quiet hours), and keep this command in the CEO's notes.
+
+[Unit]
+Description=Reporting daemon-lite: two-layer report and scheduled triggers (c-level-agent-os)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ceo_project
+ExecStart=/usr/bin/python3 %h/ceo_project/scripts/report_daemon.py --config %h/ceo_project/config/report_daemon.yaml
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=%h/.config/report-daemon/env
+Restart=on-failure
+RestartSec=30
+# exit 78 = configuration error: fix the config instead of restarting in a loop
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target

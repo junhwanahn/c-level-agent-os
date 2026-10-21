@@ -1,7 +1,9 @@
 # 05. Reporting daemon: design notes
 
-No code here on purpose: the daemon is where your notification channel, scheduler and credentials live,
-and those differ per setup. These are the design decisions that held up in daily use.
+These are the design decisions that held up in daily use. [`scripts/report_daemon.py`](../scripts/report_daemon.py)
+implements them as a daemon-lite: one Python file (PyYAML only), Telegram delivery, launchd or systemd.
+Your notification channel, schedule and credentials still differ per setup, so they live in the config,
+the service definition and environment variables, not in code. Setup: [Install](#install-daemon-lite).
 
 ## Two-layer periodic report
 
@@ -48,3 +50,75 @@ moves to the daemon.
 
 One message per report, with owner actions at the top. Scheduled runs post their own short message
 (on time / delayed n min / missed / interrupted / failed). Nothing else needs the owner's attention.
+
+## Install (daemon-lite)
+
+How the notes above map to the daemon:
+
+| Note | In `scripts/report_daemon.py` |
+|---|---|
+| Layer 1, top block | rendered from the queue with the [03](03-owner-action-queue.md) render rules, no model, plus the scheduled triggers of the next 24 h |
+| Layer 1, notable items and CEO view | one `claude -p` call in `project_dir` (tools off), JSON reply, prompt in `config/report_prompt.md` |
+| Layer 2 | the files under `inputs:` (each agent's status file), passed to that call with their age |
+| Input age | header line `Inputs: queue 2h · cto 31h STALE · cfo MISSING`; the prompt says the same |
+| Model failure | top block + `Model block unavailable (timeout after 600s); ...` |
+| Scheduled triggers | every row of the table above; state in `state/report_daemon/triggers.jsonl` |
+| Size limits | split into chunks of at most `max_chunk` UTF-16 units, labelled `(1/3)`; nothing is cut |
+
+Requirements: Python 3.9+ with PyYAML, the Claude Code CLI logged in for the user the service runs as,
+a Telegram bot. Run every command from the CEO project root.
+
+1. **Configure.**
+   ```bash
+   # TEMPLATE = your clone of this repository
+   cp "$TEMPLATE"/templates/report_daemon.yaml "$TEMPLATE"/templates/report_prompt.md config/
+   cp "$TEMPLATE"/scripts/report_daemon.py scripts/      # next to logic_agent.py
+   mkdir -p state/report_daemon                          # launchd will not create the log directory
+   ```
+   In `config/report_daemon.yaml` set `timezone` (required, IANA name) and `report_times` (quoted, `"08:00"`),
+   set `claude_cmd` to the absolute path printed by `which claude`, and list the files your agents keep current
+   under `inputs:`. Create a bot with @BotFather, send it one message, and read your chat id from
+   `https://api.telegram.org/bot<token>/getUpdates`. Token and chat id go in environment variables only:
+   ```bash
+   export REPORT_TELEGRAM_TOKEN='<token>' REPORT_TELEGRAM_CHAT_ID='<chat id>'
+   ```
+2. **Check the config.** Fix every `error`, read every `warn`:
+   ```bash
+   python3 scripts/report_daemon.py --check-config
+   ```
+3. **Dry run.** Prints the report; sends nothing and records nothing:
+   ```bash
+   python3 scripts/report_daemon.py --dry-run --once --no-model   # top block only, no model call
+   python3 scripts/report_daemon.py --dry-run --once              # one model call
+   ```
+4. **Register the service.** macOS: [`templates/service/com.example.report-daemon.plist`](../templates/service/com.example.report-daemon.plist)
+   (launchd user agent). Linux: [`templates/service/report-daemon.service`](../templates/service/report-daemon.service)
+   (systemd user unit). Each file starts with the exact install, restart and reload commands. Put `PATH`
+   (the directories of `claude` and `node`) and the two Telegram variables in the service definition.
+5. **Confirm the first report.**
+   ```bash
+   python3 scripts/report_daemon.py --once      # sends one report now, outside the schedule
+   python3 scripts/report_daemon.py --status    # daemon running?, last and next report, trigger states
+   tail state/report_daemon/daemon.log
+   ```
+   Then wait for the next slot and check that it arrives labelled `on time`.
+
+| Command | What it does |
+|---|---|
+| `report_daemon.py` | the loop; this is what the service manager runs |
+| `--check-config` | validates config, queue, triggers, prompt, CLI path, log directory, environment; never prints a secret |
+| `--dry-run --once [--no-model]` | one report now, printed to stdout; no message, no state written, triggers listed but not run |
+| `--once` | one report now, sent; recorded as `manual`, does not use up a scheduled slot |
+| `--status` | JSON lines: lock held, last and next report, each trigger's state |
+
+Operating notes:
+
+- The queue is re-read on every poll. Config changes take effect after a restart (away from report times).
+- `reports.jsonl` and `triggers.jsonl` are append-only; do not edit them. To run a trigger again, change its `trigger_at`.
+- On first start, earlier report slots are not reported as missed; scheduled items already past their catch-up
+  window are (once). Template examples dated in the past show up that way: close or delete them.
+- One process, no threads: a long trigger run blocks the loop. A report or trigger that comes due meanwhile is
+  run afterwards with the delay labelled (`daemon busy with trigger x`), not marked missed.
+- `trigger_agent` runs `python3 scripts/logic_agent.py <name> --json` (plus `--no-tools` unless `trigger_tools: true`)
+  with the prompt on stdin; the registry decides model, timeout and permissions.
+- Telegram only. For another messenger, replace `telegram_send()`; keep the split-never-truncate rule.

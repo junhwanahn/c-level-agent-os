@@ -23,7 +23,7 @@
 #            Not ready -> leave it out of the queue (keep ready: false) and keep working.
 #   prep:    paths to the prepared material (draft text, attachments, step list)
 #
-# Optional scheduled trigger (needs your own daemon; docs/05):
+# Optional scheduled trigger (run by scripts/report_daemon.py; docs/05):
 #   trigger_at:     "2026-01-15T09:05:00Z"   timezone required (Z or +hh:mm); naive = invalid
 #   trigger_prompt: "instruction to run at that time"
 #   trigger_agent:  strategy_a               run the prompt as that headless agent (logic_agents.yaml)

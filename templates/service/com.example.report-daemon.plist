@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd user agent for scripts/report_daemon.py (macOS). docs/05 "Install".
+
+  1. Copy and rename (the Label below must match the file name without .plist):
+       cp templates/service/com.example.report-daemon.plist ~/Library/LaunchAgents/com.yourname.report-daemon.plist
+  2. Edit: Label, every /ABSOLUTE/PATH/TO, PATH (must contain the directories of `which claude`,
+     `which node` and the python3 below), and the two Telegram values.
+     launchd does not read your shell profile: nothing from ~/.zshrc (nvm, pyenv, brew shellenv) exists here.
+  3. Protect the secrets: chmod 600 ~/Library/LaunchAgents/com.yourname.report-daemon.plist  (never commit it)
+  4. Create the log directory (launchd does not create it):
+       mkdir -p /ABSOLUTE/PATH/TO/ceo_project/state/report_daemon
+  5. Load:
+       plutil -lint ~/Library/LaunchAgents/com.yourname.report-daemon.plist
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.yourname.report-daemon.plist
+       launchctl print gui/$(id -u)/com.yourname.report-daemon | head -30
+
+  Restart, same definition:   launchctl kickstart -k gui/$(id -u)/com.yourname.report-daemon
+  After editing THIS FILE, kickstart keeps the OLD definition. Unload and load instead:
+       launchctl bootout gui/$(id -u)/com.yourname.report-daemon
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.yourname.report-daemon.plist
+  Restart away from report times (quiet hours), and keep this command in the CEO's notes.
+  Logs: the two paths at the bottom, plus state/report_daemon/daemon.log.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.report-daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <!-- the python3 that has PyYAML installed: check with  /usr/bin/python3 -c "import yaml" -->
+    <string>/usr/bin/python3</string>
+    <string>/ABSOLUTE/PATH/TO/ceo_project/scripts/report_daemon.py</string>
+    <string>--config</string>
+    <string>/ABSOLUTE/PATH/TO/ceo_project/config/report_daemon.yaml</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/ABSOLUTE/PATH/TO/ceo_project</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/ABSOLUTE/PATH/TO/DIR/OF/claude:/ABSOLUTE/PATH/TO/DIR/OF/node:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>REPORT_TELEGRAM_TOKEN</key>
+    <string>REPLACE_WITH_BOT_TOKEN</string>
+    <key>REPORT_TELEGRAM_CHAT_ID</key>
+    <string>REPLACE_WITH_CHAT_ID</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/ABSOLUTE/PATH/TO/ceo_project/state/report_daemon/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/ABSOLUTE/PATH/TO/ceo_project/state/report_daemon/stderr.log</string>
+</dict>
+</plist>

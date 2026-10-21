@@ -37,6 +37,15 @@ Requirements: Claude Code CLI, Python 3.9+, `pip install pyyaml`.
    python3 -m pytest tests -q
    ```
    Then drop `--dry-run`. Keep `permissions_status: proposed` until you, the owner, confirm the allowlist.
+4. **Reporting daemon.** Copy `templates/report_daemon.yaml` and `templates/report_prompt.md` into `config/`,
+   and `scripts/report_daemon.py` into `scripts/`. Set `timezone` and `report_times`; put the Telegram bot token
+   and chat id in environment variables, never in the YAML.
+   ```bash
+   python3 scripts/report_daemon.py --check-config
+   python3 scripts/report_daemon.py --dry-run --once
+   ```
+   Register it with launchd or systemd from `templates/service/`, then confirm the first report
+   (`--once`, `--status`). Steps and pitfalls: [docs/05](docs/05-reporting-daemon.md#install-daemon-lite).
 
 <p align="center"><img src="docs/assets/approval-required-always.png" alt="Critical zone: files that move real money are denied to every agent; owner approval always" width="1200" /></p>
 
@@ -49,14 +58,17 @@ Requirements: Claude Code CLI, Python 3.9+, `pip install pyyaml`.
   the owner action queue, and a registry of project agents.
 - **A small runner** (`scripts/logic_agent.py`, Python + PyYAML) that calls a project's agent headless
   from that project's directory, keeps its permission boundary, resumes and rotates sessions, and logs every call.
-- **Design notes** for a two-layer periodic report and a scheduled-trigger daemon (no daemon code).
+- **A reporting daemon-lite** (`scripts/report_daemon.py`, same dependencies) that implements the design notes
+  in [docs/05](docs/05-reporting-daemon.md): a two-layer report twice a day (top block from the queue without a model,
+  then one model call), scheduled triggers from the queue, delivery to Telegram, run by launchd or systemd.
 
 ## What it is not
 
 - **Not investment, legal or financial advice.** Nothing here tells you what to trade or how.
 - **Not a way to give agents money.** The design keeps payments, transfers, credentials and irreversible
   actions on real capital with the human. Do not give agents custody of funds or payment credentials.
-- Not a hosted product, not a runtime framework (the skill installs instructions, not a service), and not a
+- Not a hosted product and not a runtime framework: the skill installs instructions, and the only long-running
+  piece is the reporting daemon-lite, one script you register with your own service manager. Not a
   guarantee that agents behave. Permission rules reduce risk; they do not remove it. Review what your agents commit.
 
 ## Showcase
@@ -80,10 +92,14 @@ docs/01-ceo-charter.md            charter sections, responsibility matrix skelet
 docs/02-autonomy-policy.md        improvement loop, block budget, persistence
 docs/03-owner-action-queue.md     queue schema, render rules, example
 docs/04-logic-agents-headless.md  registry, permissions, session rotation, no live+headless together
-docs/05-reporting-daemon.md       two-layer report, scheduled triggers (design notes)
-templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml
+docs/05-reporting-daemon.md       two-layer report, scheduled triggers (design notes, install)
+templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml,
+                                  report_daemon.yaml, report_prompt.md
+templates/service/                launchd plist and systemd user unit for the reporting daemon
 scripts/logic_agent.py            headless runner
+scripts/report_daemon.py          reporting daemon-lite: two-layer report, scheduled triggers, Telegram
 tests/test_logic_agent.py         runner tests (stub CLI, no real calls)
+tests/test_report_daemon.py       daemon tests (fake clock, stub CLI and Telegram, no real calls)
 ```
 
 ## Paid: install and 30-day coaching

@@ -1,0 +1,57 @@
+# Reporting daemon-lite configuration (scripts/report_daemon.py)
+# Copy to: config/report_daemon.yaml   and   templates/report_prompt.md -> config/report_prompt.md
+#
+# What runs: one process started by launchd or systemd (templates/service/), never by an
+# interactive session. Every poll_seconds it (1) sends the periodic report at each report_times
+# slot and (2) runs scheduled triggers (queue items with trigger_at). Design: docs/05.
+#
+# Paths: project_dir is relative to the project root (the folder that contains scripts/);
+# every other relative path is relative to project_dir.
+# Secrets: never put the Telegram token or chat id in this file (--check-config refuses it).
+# Name the environment variables here and set them in the service definition.
+# Changes take effect when the daemon restarts; the queue is re-read on every poll.
+
+timezone: "Asia/Seoul"            # REQUIRED. IANA name; report_times, dates and D-n use it
+report_times: ["08:00", "20:00"]  # local times in `timezone`. QUOTE them: YAML reads unquoted 20:00 as 1200
+poll_seconds: 60                  # short loop; laptop sleep freezes long timers
+on_time_minutes: 5                # on-time window: trigger_at - 5 min .. trigger_at + 5 min
+catchup_minutes: 90               # later than on-time but within this: run, labelled "delayed n min";
+                                  # beyond it: one "missed" notice, not run
+collision_minutes: 5              # a trigger due this close before a report waits until the report is sent
+retry_delay_seconds: 60           # a failed trigger is retried once after this delay
+
+project_dir: "."                  # the CEO project; `claude -p` runs here, so its CLAUDE.md applies
+queue_path: config/owner_action_queue.yaml
+prompt_file: config/report_prompt.md
+log_dir: state/report_daemon      # append-only logs (reports.jsonl, triggers.jsonl), state.json,
+                                  # daemon.log, full texts under reports/ and runs/
+
+# Layer 2 inputs: files your agents keep current (status notes, check outputs). Each one is passed to
+# the model with its age; older than max_age_hours (default stale_hours) = STALE, a missing file =
+# MISSING. Both are shown in the report header and the model is told not to treat them as current.
+inputs: []
+#  - path: state/cto_status.md
+#    label: cto
+#    max_age_hours: 26
+#  - path: state/cfo_status.md
+#    label: cfo
+stale_hours: 26
+input_max_chars: 20000            # per input; anything longer is cut with an explicit marker
+
+claude_cmd: claude                # use the absolute path from `which claude`; the service PATH is not your shell's
+claude_extra_args: []             # extra CLI flags, e.g. ["--effort", "low"]; check `claude --help` for your version
+model: ""                         # optional; empty = the CLI default
+timeout_s: 600                    # limit for the report's model call and for direct triggers
+report_tools: false               # tools off for the report call; the inputs are already in the prompt
+
+logic_agent_script: scripts/logic_agent.py   # trigger_agent items run through it (docs/04)
+agent_timeout_s: 3600             # outer limit for a trigger_agent run; the registry's timeout_sec applies inside
+
+telegram:
+  token_env: REPORT_TELEGRAM_TOKEN      # NAME of the env var holding the bot token (from @BotFather)
+  chat_id_env: REPORT_TELEGRAM_CHAT_ID  # NAME of the env var holding the chat id
+max_chunk: 4000                   # Telegram allows 4096 UTF-16 units per message; longer reports are split, never cut
+
+max_notable: 5                    # model block: notable items shown (the rest: "and n more" + path of the full reply)
+max_executed: 8                   # top block: "Decided and executed by CEO (24h)" lines before "and n more"
+trigger_result_lines: 15          # lines of a trigger's answer in its message; the full text stays in log_dir/runs/

@@ -62,7 +62,7 @@ def action_queue(items):
 - Send reply to partner X (draft final, 6 lines) - 2026-01-15 (D-0) - external
 - Approve OAuth consent for the video upload API (command prepared) - 2026-01-16 (D-1) - local
 > Pending fact checks 1
-- Did we already promise customer Y a delivery date? - 2026-01-17 (D-2) - facts
+- Did we already promise customer Y a delivery date? (yes/no + date) - 2026-01-17 (D-2) - facts
 
 > Decided and executed by CEO (24h) 1
 - Re-run analysis B with hypothesis 2 (hypothesis 1 rejected) (01/14)

@@ -38,6 +38,15 @@ npx skills add junhwanahn/c-level-agent-os
    python3 -m pytest tests -q
    ```
    이후 `--dry-run` 을 빼고 실행한다. 허용 목록을 오너가 확정하기 전까지 `permissions_status: proposed` 를 유지한다.
+4. **보고 데몬.** `templates/report_daemon.yaml`, `templates/report_prompt.md` 를 `config/` 에,
+   `scripts/report_daemon.py` 를 `scripts/` 에 복사한다. `timezone` 과 `report_times` 를 지정하고, 텔레그램 봇 토큰과
+   chat id 는 YAML 이 아니라 환경변수에만 둔다.
+   ```bash
+   python3 scripts/report_daemon.py --check-config
+   python3 scripts/report_daemon.py --dry-run --once
+   ```
+   `templates/service/` 의 launchd 또는 systemd 정의로 등록한 뒤 첫 보고를 확인한다(`--once`, `--status`).
+   단계와 함정: [docs/05](docs/05-reporting-daemon.md#install-daemon-lite).
 
 <p align="center"><img src="docs/assets/approval-required-always.png" alt="크리티컬 존: 돈이 움직이는 파일은 모든 에이전트에게 거부, 사람 승인 항상" width="1200" /></p>
 
@@ -50,15 +59,17 @@ npx skills add junhwanahn/c-level-agent-os
   프로젝트 에이전트 레지스트리.
 - **작은 실행기** (`scripts/logic_agent.py`, Python + PyYAML): 프로젝트 에이전트를 그 디렉터리에서
   headless 로 호출하고, 권한 경계를 유지하며, 세션을 이어 쓰거나 회전하고, 모든 호출을 기록한다.
-- **설계 노트**: 2계층 정기보고와 예약 트리거 데몬(데몬 코드는 포함하지 않음).
+- **보고 데몬-lite** (`scripts/report_daemon.py`, 같은 의존성): [docs/05](docs/05-reporting-daemon.md) 설계 노트를
+  구현한다. 하루 2회 2계층 보고(LLM 없이 큐에서 렌더한 상단 블록 → 모델 호출 1회), 큐의 예약 트리거,
+  텔레그램 전달, launchd 또는 systemd 로 상주.
 
 ## 이것이 아닌 것
 
 - **투자·법률·재무 자문이 아니다.** 무엇을 어떻게 거래하라는 내용은 없다.
 - **에이전트에게 돈을 맡기는 방법이 아니다.** 결제·이체·자격증명·실자본에 대한 비가역 조치는 사람에게
   남겨 두도록 설계했다. 에이전트에게 자금 보관이나 결제 수단을 주지 말 것.
-- 호스팅 제품도, 상주 실행 프레임워크도 아니며(스킬 설치는 지침 파일을 추가할 뿐 서비스를 띄우지 않는다),
-  에이전트의 행동을 보증하지 않는다. 권한 규칙은 위험을 줄일 뿐 없애지 않는다. 에이전트가 커밋한 내용은 직접 검토할 것.
+- 호스팅 제품도, 실행 프레임워크도 아니다. 스킬은 지침 파일을 설치할 뿐이고, 상주하는 것은 직접 서비스 관리자에
+  등록하는 스크립트 하나(보고 데몬-lite)뿐이다. 에이전트의 행동을 보증하지도 않는다. 권한 규칙은 위험을 줄일 뿐 없애지 않는다. 에이전트가 커밋한 내용은 직접 검토할 것.
 
 ## 사례
 
@@ -81,10 +92,14 @@ docs/01-ceo-charter.md            헌장 구성, 책임 매트릭스 골격
 docs/02-autonomy-policy.md        개선 루프, 블록 예산, 지속성
 docs/03-owner-action-queue.md     큐 스키마, 렌더 규칙, 예시
 docs/04-logic-agents-headless.md  레지스트리, 권한, 세션 회전, 라이브·headless 동시 금지
-docs/05-reporting-daemon.md       2계층 정기보고, 예약 트리거(설계 노트)
-templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml
+docs/05-reporting-daemon.md       2계층 정기보고, 예약 트리거(설계 노트, 설치)
+templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml,
+                                  report_daemon.yaml, report_prompt.md
+templates/service/                보고 데몬용 launchd plist, systemd user unit
 scripts/logic_agent.py            headless 실행기
+scripts/report_daemon.py          보고 데몬-lite: 2계층 보고, 예약 트리거, 텔레그램
 tests/test_logic_agent.py         실행기 테스트(stub CLI, 실제 호출 없음)
+tests/test_report_daemon.py       데몬 테스트(가짜 시계, stub CLI·텔레그램, 실제 호출 없음)
 ```
 
 문서 본문, 템플릿, 스킬 파일은 영문입니다.
