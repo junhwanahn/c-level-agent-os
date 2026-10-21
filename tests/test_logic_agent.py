@@ -1,7 +1,7 @@
 """Regression tests for scripts/logic_agent.py.
 
 Pinned behaviour: mode refusal | allowlist only when confirmed, denylist always |
-never --permission-mode / --continue | session resume and rotation |
+never --permission-mode / --continue | --no-tools passes --tools "" | session resume and rotation |
 fresh retry when the resumed session is gone | session and call records.
 
 Run: python3 -m pytest tests -q   (or: python3 -m unittest discover tests)
@@ -86,6 +86,12 @@ class ResolveAndCommand(unittest.TestCase):
         self.assertEqual(cmd2[cmd2.index("--allowedTools") + 1], "Bash(python3 *)")
         self.assertIn("H.md", cmd2[cmd2.index("--append-system-prompt") + 1])
         self.assertIn("rotated", la.build_preamble(spec, rotated=True))
+
+    def test_no_tools_flag(self):
+        spec = la.resolve("strategy_a", la.load_registry(_registry(self.tmp)))
+        cmd = la.build_cmd(spec, None, "opus", None, claude_cmd="claude", tools_off=True)
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "")
+        self.assertNotIn("--tools", la.build_cmd(spec, None, "opus", None, claude_cmd="claude"))
 
 
 class SessionsAndCalls(unittest.TestCase):

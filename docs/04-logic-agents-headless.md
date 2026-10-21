@@ -75,5 +75,7 @@ External publication, critical-zone edits and irreversible actions always do.
 - Starts the child in its own process group; on timeout it kills the whole group (ssh, node children) and returns rc 124.
 - Appends one JSON line per call to `state/logic_agent_calls.jsonl`: agent, model, session reason, cost, duration, errors.
 - `--dry-run` prints the exact command and preamble. `--status` lists sessions and transcript sizes.
+- `--no-tools` passes `--tools ""` (no tools at all). The reporting daemon uses it for `trigger_agent` runs
+  unless the queue item sets `trigger_tools: true` ([05](05-reporting-daemon.md)).
 
 Check flag names against `claude --help` for your CLI version before the first real call.

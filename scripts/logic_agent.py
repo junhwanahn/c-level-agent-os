@@ -29,6 +29,7 @@ Usage:
   python3 scripts/logic_agent.py strategy_a -p "..." --dry-run    # print command + preamble only
   python3 scripts/logic_agent.py --status                          # sessions and transcript sizes
   python3 scripts/logic_agent.py ops_bot -p "..." --allowed-tools "Bash(python3 *)"  # per-call extra allow (logged)
+  python3 scripts/logic_agent.py ops_bot -p "..." --no-tools       # no tools at all (scheduled runs default to this)
 
 Paths resolve relative to the project root (the parent of scripts/).
 Environment overrides: LOGIC_AGENTS_REGISTRY, LOGIC_AGENTS_STATE_DIR, CLAUDE_CMD.
@@ -186,10 +187,12 @@ def build_preamble(spec: dict, rotated: bool) -> str:
 
 def build_cmd(spec: dict, session_id: Optional[str], model: str, effort: Optional[str],
               extra_allowed: Optional[list] = None, claude_cmd: Optional[str] = None,
-              rotated: bool = False) -> list:
+              rotated: bool = False, tools_off: bool = False) -> list:
     cmd = [claude_cmd or default_claude_cmd(), "-p", "--output-format", "json", "--model", model]
     if effort:
         cmd += ["--effort", str(effort)]
+    if tools_off:
+        cmd += ["--tools", ""]
     cmd += ["--append-system-prompt", build_preamble(spec, rotated)]
     if session_id:
         cmd += ["--resume", session_id]
@@ -273,7 +276,7 @@ def call(name: str, prompt: str, model: Optional[str] = None, effort: Optional[s
          timeout: Optional[int] = None, fresh: bool = False, resume: Optional[str] = None,
          extra_allowed: Optional[list] = None, force_mode: bool = False, dry_run: bool = False,
          registry: Optional[Path] = None, sessions_path: Optional[Path] = None,
-         calls_log_path: Optional[Path] = None, claude_cmd: Optional[str] = None) -> dict:
+         calls_log_path: Optional[Path] = None, claude_cmd: Optional[str] = None, tools_off: bool = False) -> dict:
     """One call. If the resumed session no longer exists, retry once with a fresh session.
     Failures are reported via is_error/rc rather than exceptions (registry/mode/lock errors still raise)."""
     if not (prompt or "").strip():
@@ -287,10 +290,10 @@ def call(name: str, prompt: str, model: Optional[str] = None, effort: Optional[s
 
     session_id, reason = decide_session(spec, load_sessions(sessions_path), fresh=fresh, resume=resume)
     rotated = reason.startswith("rotate")
-    cmd = build_cmd(spec, session_id, model, effort, extra_allowed, claude_cmd, rotated=rotated)
+    cmd = build_cmd(spec, session_id, model, effort, extra_allowed, claude_cmd, rotated=rotated, tools_off=tools_off)
     base = {"agent": name, "cwd": spec["path"], "model": model, "effort": effort, "timeout": timeout,
             "session_reason": reason, "permissions_confirmed": spec["permissions_confirmed"],
-            "extra_allowed": list(extra_allowed or [])}
+            "extra_allowed": list(extra_allowed or []), "tools_off": tools_off}
     if dry_run:
         return {**base, "cmd": cmd, "preamble": build_preamble(spec, rotated), "dry_run": True,
                 "result": "", "session_id": session_id or "", "cost_usd": 0.0, "duration_ms": 0,
@@ -303,7 +306,7 @@ def call(name: str, prompt: str, model: Optional[str] = None, effort: Optional[s
         if failed and session_id and _RESUME_MISSING.search(f"{err}\n{out}"):
             reason += "->fresh(resume failed)"
             session_id, rotated = None, True
-            cmd = build_cmd(spec, None, model, effort, extra_allowed, claude_cmd, rotated=True)
+            cmd = build_cmd(spec, None, model, effort, extra_allowed, claude_cmd, rotated=True, tools_off=tools_off)
             rc, out, err, ms2 = _run(cmd, prompt, spec["path"], timeout)
             ms += ms2
             parsed = _parse(out)
@@ -326,7 +329,7 @@ def call(name: str, prompt: str, model: Optional[str] = None, effort: Optional[s
             save_sessions(state, sessions_path)
     _append_call_log({"ts": _now(),
                       **{k: resp[k] for k in ("agent", "model", "effort", "session_id", "session_reason",
-                                              "permissions_confirmed", "extra_allowed", "rc", "is_error",
+                                              "permissions_confirmed", "extra_allowed", "tools_off", "rc", "is_error",
                                               "cost_usd", "duration_ms", "rotated", "resumed")},
                       "prompt_head": prompt.strip()[:160], "result_len": len(text),
                       "error": (err or "")[:300] if is_error else ""}, calls_log_path)
@@ -361,6 +364,7 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--resume", help="resume a specific session id")
     ap.add_argument("--allowed-tools", action="append", default=None,
                     help="extra allow rule for this call only (repeatable; logged)")
+    ap.add_argument("--no-tools", action="store_true", help="disable all tools for this call (passes --tools \"\")")
     ap.add_argument("--force-mode", action="store_true", help="call a live/in_session agent anyway (not advised)")
     ap.add_argument("--dry-run", action="store_true", help="print the command and preamble, do not run")
     ap.add_argument("--status", action="store_true", help="list agents, sessions and transcript sizes")
@@ -385,7 +389,7 @@ def main(argv: Optional[list] = None) -> int:
     try:
         resp = call(a.agent, prompt, model=a.model, effort=a.effort, timeout=a.timeout, fresh=a.fresh,
                     resume=a.resume, extra_allowed=a.allowed_tools, force_mode=a.force_mode,
-                    dry_run=a.dry_run)
+                    dry_run=a.dry_run, tools_off=a.no_tools)
     except LogicAgentError as e:
         print(f"[logic_agent] {e}", file=sys.stderr)
         return 1
