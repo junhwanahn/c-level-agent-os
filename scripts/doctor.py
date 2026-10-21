@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Installation check for a C-Level Agent OS project. scripts/install.py runs it at the end.
 
-  python3 scripts/doctor.py               # check the CEO project this script is in
-  python3 scripts/doctor.py --root DIR    # check another CEO project
+  python3 scripts/doctor.py                  # check the CEO project this script is in
+  python3 scripts/doctor.py --root DIR       # check another CEO project
+  python3 scripts/doctor.py --check-login    # also send Claude one short message (asks first; --yes skips that)
 
 One line per check:  ✓ ok   ⚠ works, but read it   ✗ fix it before relying on the setup.
 Exit code 1 when there is at least one ✗.
 
-What it checks: Python and PyYAML, the claude CLI (absolute path, and that it accepts the flags the
-runner and the daemon pass), placeholders left in the installed files ({{...}} and //ABSOLUTE/PATH/TO),
-every project agent's folder, handoff file and protected zone (denied path rules must be absolute; a
-missing path is a warning), template example items left in the queue, the report daemon config
-(timezone, report times, queue, prompt, Telegram variables), pytest (optional) and the rendered service file.
-It reads files and runs `claude --help`; it never calls a model, never prints a secret, and changes
-nothing except creating the daemon's log directory when it is missing.
+What it checks: Python and PyYAML, the claude CLI (absolute path, the flags the runner and the daemon
+pass, and that it is signed in: `claude auth status`), placeholders left in the installed files ({{...}} and
+//ABSOLUTE/PATH/TO), every project agent's folder, handoff file and protected zone (denied path rules must be
+absolute; a missing path is a warning), template example items left in the queue, the report daemon config
+(timezone, report times, queue, prompt, Telegram variables), pytest (optional), the rendered service file
+and the registered copy (Telegram variables present when delivery is telegram, same as the rendered file).
+It reads files and runs `claude --help` and `claude auth status`; it calls a model only with --check-login
+and your yes, never prints a secret, and changes nothing except creating the daemon's log directory.
 Dependencies: Python 3.9+; the PyYAML checks are skipped (and reported) when PyYAML is missing.
 """
 from __future__ import annotations
@@ -55,6 +57,7 @@ class Report:
     def __init__(self, out=None):
         self.out = out or sys.stdout
         self.rows: list = []
+        self.login: Optional[bool] = None  # True signed in, False not signed in, None not known
         enc = getattr(self.out, "encoding", None) or "utf-8"
         try:
             "✓⚠✗".encode(enc)
@@ -152,18 +155,67 @@ def find_claude(configured: Optional[str]) -> tuple:
     return None, None
 
 
+def cli_env() -> dict:
+    """The environment the daemon and the runner give claude: no CLAUDECODE / CLAUDE_CODE_* (nested-session guard)."""
+    return {k: v for k, v in os.environ.items() if k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE_")}
+
+
 def missing_flags(claude: str, flags) -> Optional[list]:
     """Flags absent from `claude --help`, or None when the help text cannot be read."""
     try:
-        r = subprocess.run([claude, "--help"], capture_output=True, text=True, timeout=30,
-                           env={k: v for k, v in os.environ.items()
-                                if k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE_")})
+        r = subprocess.run([claude, "--help"], capture_output=True, text=True, timeout=30, env=cli_env())
     except (OSError, subprocess.TimeoutExpired):
         return None
     text = (r.stdout or "") + (r.stderr or "")
     if "--" not in text:
         return None
     return [f for f in flags if not re.search(rf"(^|[\s,]){re.escape(f)}\b", text)]
+
+
+def login_status(claude: str) -> tuple:
+    """(True / False / None, detail) from `claude auth status`, which makes no model call. None = cannot tell."""
+    try:
+        r = subprocess.run([claude, "auth", "status"], capture_output=True, text=True, timeout=30, env=cli_env())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"`claude auth status` did not answer ({type(e).__name__})"
+    out = (r.stdout or "").strip()
+    try:
+        data = json.loads(out)
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and "loggedIn" in data:
+        return bool(data["loggedIn"]), str(data.get("authMethod") or "")
+    low = (out + " " + (r.stderr or "")).lower()
+    if "not logged in" in low or "not signed in" in low:
+        return False, ""
+    return None, "this claude version has no `claude auth status`"
+
+
+LOGIN_PROMPT = "Reply with the single word: ok"
+
+
+def login_call(claude: str, cwd: Path) -> tuple:
+    """(ok, detail): one short model call with tools off, the way the daemon calls claude. The prompt goes on
+    stdin: --tools takes a list, so a prompt argument after it would be read as a tool name."""
+    try:
+        r = subprocess.run([claude, "-p", "--output-format", "json", "--tools", ""], input=LOGIN_PROMPT,
+                           capture_output=True, text=True, timeout=180, env=cli_env(), cwd=str(cwd))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"no answer ({type(e).__name__})"
+    try:
+        data = json.loads(r.stdout or "")
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        text = str(data.get("result") or "").strip()
+        if r.returncode == 0 and not data.get("is_error"):
+            return True, text[:40]
+        return False, (text or (r.stderr or "").strip() or f"exit {r.returncode}")[:200]
+    return False, ((r.stderr or r.stdout or "").strip() or f"exit {r.returncode}")[:200]
+
+
+SIGN_IN_HOW = ("run `claude` in Terminal, type /login and follow the browser steps (or run `claude auth login`), "
+               "then run python3 scripts/doctor.py again")
 
 
 # ---------------------------------------------------------------- checks
@@ -237,7 +289,7 @@ def check_placeholders(rep: Report, root: Path) -> None:
         rep.ok("no placeholders left ({{...}} or //ABSOLUTE/PATH/TO) in the installed files")
 
 
-def check_claude(rep: Report, root: Path, yaml) -> None:
+def check_claude(rep: Report, root: Path, yaml, login: bool = False, consent=None) -> None:
     configured, effort = None, None
     if yaml:
         cfg, _ = _load_yaml(yaml, root / "config" / "report_daemon.yaml")
@@ -268,6 +320,30 @@ def check_claude(rep: Report, root: Path, yaml) -> None:
                  f"update Claude Code (claude update){hint}")
     else:
         rep.ok("claude CLI lists every flag the runner and the daemon pass")
+    state, detail = login_status(resolved)
+    rep.login = state
+    if state is True:
+        rep.ok(f"claude is signed in ({detail or 'auth status'})")
+    elif state is False:
+        rep.fail(f"claude is installed but NOT signed in: the model part of every report fails until you sign in. "
+                 f"{SIGN_IN_HOW[0].upper()}{SIGN_IN_HOW[1:]}")
+    else:
+        rep.warn(f"could not check the claude sign-in without a model call ({detail}): "
+                 f"python3 scripts/doctor.py --check-login sends one short message after asking you")
+    if login:
+        ask = consent or (lambda: input("This sends Claude one short message (\"" + LOGIN_PROMPT + "\"); it uses a "
+                                        "small part of your plan. Continue? [y/N]: ").strip().lower() in ("y", "yes"))
+        if not ask():
+            rep.warn("--check-login skipped: you did not agree to the model call")
+            return
+        ok, detail = login_call(resolved, root)
+        if ok:
+            rep.login = True
+            rep.ok(f"claude answered a test message (model call works): {detail!r}")
+        else:
+            if rep.login is None and "logged in" in detail.lower():
+                rep.login = False
+            rep.fail(f"the test message to claude failed: {detail}. If it says 'Not logged in': {SIGN_IN_HOW}")
 
 
 def check_registry(rep: Report, root: Path, yaml) -> list:
@@ -420,13 +496,31 @@ def _service_python(text: str, kind: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def check_service(rep: Report, root: Path) -> None:
+def installed_service_path(f: Path, kind: str) -> Path:
+    """Where the registered copy of a rendered service file lives."""
+    return (Path.home() / "Library" / "LaunchAgents" / f.name if kind == "launchd"
+            else Path.home() / ".config" / "systemd" / "user" / f.name)
+
+
+_TG_VALUE = re.compile(r"(<key>REPORT_TELEGRAM_(?:TOKEN|CHAT_ID)</key>\s*<string>)[^<]*(</string>)")
+
+
+def service_differs(rendered: str, installed: str) -> bool:
+    """True when the registered copy is not the rendered file (Telegram values and comments ignored)."""
+    def norm(t: str) -> str:
+        t = re.sub(r"<!--.*?-->", "", _TG_VALUE.sub(r"\1\2", t), flags=re.S)
+        return "\n".join(ln.strip() for ln in t.splitlines() if ln.strip() and not ln.strip().startswith("#"))
+    return norm(rendered) != norm(installed)
+
+
+def check_service(rep: Report, root: Path, delivery: Optional[str] = None) -> None:
     sdir = root / "service"
     files = sorted(sdir.glob("*.plist")) + sorted(sdir.glob("*.service")) if sdir.is_dir() else []
     if not files:
-        rep.warn("no rendered service file in service/: re-run install.py, or fill templates/service/ by hand "
-                 "(README section 3)")
+        rep.warn("no rendered service file in service/: run python3 scripts/install.py --render-service "
+                 "(it writes one from config/ and prints the commands that register it)")
         return
+    telegram = delivery == "telegram"
     for f in files:
         kind = "launchd" if f.suffix == ".plist" else "systemd"
         text = f.read_text(errors="replace")
@@ -445,20 +539,31 @@ def check_service(rep: Report, root: Path) -> None:
                     rep.warn(f"{rel}: {py} has no PyYAML; install it for that python ({py} -m pip install --user pyyaml)")
             except (OSError, subprocess.TimeoutExpired):
                 rep.warn(f"{rel}: could not run {py}")
-        if "REPLACE_WITH_" in text:
-            rep.warn(f"{rel}: the Telegram token and chat id are still REPLACE_WITH_...: you put them into the "
-                     f"installed copy (owner action in the queue), never into git")
-        installed = (Path.home() / "Library" / "LaunchAgents" / f.name if kind == "launchd"
-                     else Path.home() / ".config" / "systemd" / "user" / f.name)
-        if installed.is_file():
-            rep.ok(f"service registered: {installed}")
+        if kind == "launchd" and telegram and "REPORT_TELEGRAM_TOKEN" not in text:
+            rep.fail(f"{rel} has no Telegram variables but config/report_daemon.yaml says delivery: telegram, so no "
+                     f"report would be sent: run python3 scripts/install.py --reconfigure delivery")
+        installed = installed_service_path(f, kind)
+        if not installed.is_file():
+            rep.warn(f"service not registered yet ({installed} missing): paste the commands from the install "
+                     f"summary (python3 scripts/install.py --render-service prints them again)")
+            continue
+        itext = installed.read_text(errors="replace")
+        if kind == "launchd" and telegram and "REPORT_TELEGRAM_TOKEN" not in itext:
+            rep.fail(f"the registered copy {installed} has no Telegram variables, so no report is sent: re-register "
+                     f"it (python3 scripts/install.py --render-service prints the commands)")
+        elif kind == "launchd" and telegram and "REPLACE_WITH_" in itext:
+            rep.warn(f"the registered copy {installed} still has REPLACE_WITH_...: put the bot token and chat id "
+                     f"there, save, then bootout and bootstrap it again (the owner action in the queue)")
+        elif service_differs(text, itext):
+            rep.warn(f"the registered copy {installed} differs from {rel} (an older install?): re-register it "
+                     f"(python3 scripts/install.py --render-service prints the commands)")
         else:
-            rep.warn(f"service not registered yet ({installed} missing): README section 3, or the owner action "
-                     f"in config/owner_action_queue.yaml")
+            rep.ok(f"service registered: {installed}")
 
 
 # ---------------------------------------------------------------- main
-def run(root, out=None) -> Report:
+def run(root, out=None, login: bool = False, consent=None) -> Report:
+    """login=True: also the --check-login model call, after consent() says yes."""
     root = Path(root).expanduser().resolve()
     rep = Report(out)
     print(f"doctor: {root}", file=rep.out)
@@ -466,14 +571,18 @@ def run(root, out=None) -> Report:
     yaml = check_yaml(rep)
     check_files(rep, root)
     check_placeholders(rep, root)
-    check_claude(rep, root, yaml)
+    check_claude(rep, root, yaml, login=login, consent=consent)
+    delivery = None
     if yaml:
         protected = check_registry(rep, root, yaml)
         check_ceo_settings(rep, root, protected)
         check_queue(rep, root, yaml)
         check_report_config(rep, root)
+        cfg, _ = _load_yaml(yaml, root / "config" / "report_daemon.yaml")
+        if isinstance(cfg, dict):
+            delivery = str(cfg.get("delivery") or "telegram").strip().lower()
     check_pytest(rep)
-    check_service(rep, root)
+    check_service(rep, root, delivery)
     print(f"doctor: {rep.count('ok')} ok, {rep.count('warn')} warning(s), {rep.count('fail')} failure(s)",
           file=rep.out)
     if rep.failures:
@@ -485,8 +594,12 @@ def run(root, out=None) -> Report:
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description="Check a C-Level Agent OS installation")
     ap.add_argument("--root", default=str(HERE.parent), help="CEO project root (default: the parent of scripts/)")
+    ap.add_argument("--check-login", action="store_true",
+                    help="also send Claude one short test message to prove the sign-in works (asks first)")
+    ap.add_argument("--yes", action="store_true", help="with --check-login: do not ask (the owner already agreed)")
     a = ap.parse_args(argv)
-    return 1 if run(a.root).failures else 0
+    consent = (lambda: True) if a.yes else None
+    return 1 if run(a.root, login=a.check_login, consent=consent).failures else 0
 
 
 if __name__ == "__main__":

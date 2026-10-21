@@ -46,70 +46,131 @@ Nothing outside the queue needs you. Next CEO step: the weekly review tomorrow m
   softened or re-ranked. It is your whole to-do list. If something is not there, you do not need to do it.
 - Each owner action is prepared up to the last click (draft, attachments, click path). You send, pay, sign or answer.
 - Everything else the CEO agent decides, executes and reports in the second block, with the age of every input.
+- On the first day you see only the setup steps the installer put in the queue. Input lines such as `cto 5h` appear
+  once you list your agents' status files under `inputs:` in `config/report_daemon.yaml`.
+- With delivery `none` nothing is sent: each report is saved as a file under `state/report_daemon/reports/`.
+- Your computer makes the report, so it must be on and awake at the report time (see the box in section 2).
 
 ## 2. Quick start (no coding)
 
 You need a Mac or Linux computer, [Claude Code](https://code.claude.com/docs/en/setup) installed and signed in
-(run `claude` once), and Python 3 (on a Mac, the first `python3` or `git` offers to install Apple's command line
-tools: accept). Open Terminal and type three commands:
+(type `claude` in Terminal; if it asks, type `/login` and follow the browser steps), and Python 3 (on a Mac, the first
+`python3` or `git` offers to install Apple's command line tools: accept). Open Terminal and type these commands:
 
 ```bash
-git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os my-company && cd my-company
+git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os my-company
+cd my-company
 python3 scripts/install.py
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
 1. **Get it.** Downloads the template into a new folder `my-company`; that folder becomes your company's CEO folder.
-   No git? Download the ZIP from GitHub, unzip it, and open Terminal in that folder.
-2. **Install.** About ten plain questions, each with a default you accept with Enter: company, your name, time zone,
-   report times, messenger (`telegram`, or `none` to start with files only), which roles, and your project folders.
-   If PyYAML (the only dependency) is missing, it offers to install it. It ends with a check and one line:
-   `STATUS: COMPLETE`, or `NOT COMPLETE` with the exact things to fix.
+   No git? Download the ZIP from GitHub, unzip it, then open Terminal in that folder (see the box below).
+2. **Install.** 12 questions (7 more for each project folder you add), about 3 minutes. Every question shows its
+   default in [brackets] or says what Enter does, so pressing Enter all the way through works: you get an
+   installation without project folders and can add them later by running the installer again. Ctrl+C stops at any
+   time; no installation file is written before the last question. If PyYAML (the only dependency) is missing, it
+   offers to install it. It ends with a check and one line: `STATUS: COMPLETE`, or `NOT COMPLETE` with the exact things
+   to fix. The summary is read back from the files it wrote, and it prints the service commands for section 3 with
+   your paths filled in.
 3. **See tomorrow's report now.** Prints the report you would receive (one model call; nothing is sent or recorded).
-   Add `--no-model` to see only the top block.
+   Add `--no-model` to see only the top block. If it says `Not logged in`, type `claude`, then `/login`, and try again.
+
+Running the installer again in the same folder asks first: 1 keep everything (only check it and show what the files
+say), 2 answer again and overwrite (each replaced file keeps a `.bak` copy; `HANDOFF.md` and the queue are never
+replaced), 3 stop. To change only how reports reach you: `python3 scripts/install.py --reconfigure delivery`.
+To change the time zone or report times: `python3 scripts/install.py --reconfigure schedule`.
 
 **Protected zone.** For each project the installer asks which files or folders move real money or control live
 services (payments, pricing, live trading, send jobs). Each one becomes an absolute deny rule for that project's agent
-and for the CEO session. If you leave it empty, you must type `none` to confirm, and the summary shows
+and for the CEO session. A path that does not exist is refused unless you confirm it (a typo would leave the real
+folder unprotected). If you leave the zone empty, you must type `none` to confirm, and the summary shows
 **NO PROTECTED ZONE** in a box. A template placeholder left anywhere means the install is not complete.
 
-Then open Claude Code in this folder (`claude`) and ask for a recap. From now on your to-do list is
-`config/owner_action_queue.yaml`; the installer already put your remaining setup steps there. Run
-`python3 scripts/doctor.py` any time to re-check the installation (✓ ok, ⚠ read it, ✗ fix it).
+Then open Claude Code in this folder: type `claude`, press Enter, and type `recap` (for example: "recap, please").
+From now on your to-do list is `config/owner_action_queue.yaml` (open it with `open -e config/owner_action_queue.yaml`);
+the installer already put your remaining setup steps there. When you finish one, tell the CEO in Claude Code (for
+example "done: register the report service"); it sets `status: done` and `done_at`.
+Run `python3 scripts/doctor.py` any time to re-check the installation (✓ ok, ⚠ read it, ✗ fix it). It checks that
+Claude Code is signed in without calling a model; `python3 scripts/doctor.py --check-login` also sends Claude one short
+test message, after asking you.
 
-**Or let your agent do it.** In the company folder run `npx skills add junhwanahn/c-level-agent-os`. If it asks,
-choose Claude Code and the **Project** scope (Project writes only into this folder: the skill file, a `.claude/skills`
-link and `skills-lock.json`; Global writes to your home folder). Then ask your agent: *"Set up the C-Level Agent OS
-for my company."* It asks you the same questions, runs the same installer, and shows you the check.
+- **Project agents start with few tools.** Until you confirm the proposed allowlist, each one has only the tools of its
+  own folder's `.claude/settings*.json`. The decision is yours: say it to the CEO in Claude Code in your own words
+  (example in the box below) and it records your words, the date and the scope, or edit `config/logic_agents.yaml`.
+- **Usage.** Project agents run with `model: opus` and `effort: high` by default (`defaults:` in
+  `config/logic_agents.yaml`); lower them if your plan is small.
+- **Your own history.** The company folder starts as a copy of the template, so git still points at the template
+  repository. To keep your records from ever being pushed there: `git remote rename origin template`.
+
+**Or let your agent do it.** This needs Node.js (check with `npx --version`; if it is not found, install Node.js from
+nodejs.org first). In the company folder run `npx skills add junhwanahn/c-level-agent-os`. If it asks, choose Claude
+Code and the **Project** scope (Project writes only into this folder: the skill file, a `.claude/skills` link and
+`skills-lock.json`; Global writes to your home folder). Then ask your agent: *"Set up the C-Level Agent OS for my
+company."* It asks you the same questions, runs the same installer, and shows you the check.
+
+> **Words used here**
+>
+> - **Absolute path**: the full address of a folder, starting with `/` (such as `/Users/you/shop`), or with `~` for
+>   your home folder (`~/shop`). To type one, drag the folder from Finder into the Terminal window.
+> - **Open Terminal in a folder**: type `cd` and a space, drag the folder from Finder into the window, press Enter.
+> - **Ctrl+C**: hold Control and press C. It stops the command that is running.
+> - **Node.js**: needed only for `npx skills add`, not for the installer.
+> - **Telegram token and chat id**: (1) in Telegram, open @BotFather, send `/newbot`, copy the token it gives you;
+>   (2) send your new bot any message; (3) in a browser open `https://api.telegram.org/bot`, your token, then
+>   `/getUpdates` (one address, no spaces) and copy the number after `"chat":{"id":`. If the page shows
+>   `{"ok":true,"result":[]}`, send the bot another message and reload.
+> - **Confirming the allowlist**: in Claude Code, say for example *"I confirm the allowlist for shop: it may edit
+>   files in its own folder."* The CEO then writes this into `config/logic_agents.yaml`:
+>
+>   ```yaml
+>   permissions_status: confirmed
+>   permissions_confirmed:
+>     date: "2026-01-15"
+>     by: "Minji Kim"
+>     quote: "I confirm the allowlist for shop: it may edit files in its own folder."
+>     scope: "shop: allowed_tools as proposed"
+>   ```
+> - **Awake at report time**: the report is made on your computer, so it must be on and not asleep at the report time.
+>   If it was asleep, the report goes out when it wakes, as long as that is within 90 minutes (labelled `delayed`);
+>   later than that you get one `missed` notice instead.
 
 ## 3. Register the service (reports arrive by themselves)
 
-The installer wrote the service file with your paths already filled in: `service/<label>.plist` on macOS,
-`service/report-daemon.service` on Linux. The owner action `register_report_service_…` in your queue holds the exact
-commands for your machine. For Telegram: open @BotFather, send `/newbot`, copy the token; send your bot one message,
-open `https://api.telegram.org/bot<token>/getUpdates` and copy `chat.id`.
+The installer wrote the service file with your paths already filled in (`service/` folder) and printed the exact
+commands for this computer at the end of its summary, under *2. register the report service*. **Paste those lines into
+Terminal as they are.** They are also in your queue item `register_report_service_…`. To print them again:
+`python3 scripts/install.py --render-service`.
 
-macOS (launchd user agent; `<label>` is printed by the installer, e.g. `com.my-company.report-daemon`):
+What you paste depends on how reports reach you:
 
-```bash
-cp service/<label>.plist ~/Library/LaunchAgents/ && chmod 600 ~/Library/LaunchAgents/<label>.plist
-open -e ~/Library/LaunchAgents/<label>.plist      # replace REPLACE_WITH_BOT_TOKEN and REPLACE_WITH_CHAT_ID, save
-plutil -lint ~/Library/LaunchAgents/<label>.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
-python3 scripts/report_daemon.py --status          # "daemon": "running", next report time
+- **`none` (files only):** reports are saved only as files under `state/report_daemon/reports/`, and there is no
+  Telegram value to fill in. To switch to Telegram later, run `python3 scripts/install.py --reconfigure delivery`,
+  answer `telegram`, and paste the commands it prints. It updates `config/report_daemon.yaml`, the service file and
+  your queue together.
+- **`telegram`:** the first lines copy the service file and open the copy in TextEdit. Replace `REPLACE_WITH_BOT_TOKEN`
+  and `REPLACE_WITH_CHAT_ID` (how to get them: the box in section 2), save, close TextEdit, then paste the remaining
+  lines. On Linux, the line that writes `~/.config/report-daemon/env` holds `PASTE_TOKEN` and `PASTE_CHAT_ID`:
+  replace both before pressing Enter.
+
+Success on macOS looks like this (`plutil` says OK, `launchctl bootstrap` prints nothing, the status says running):
+
+```text
+/Users/you/Library/LaunchAgents/com.my-company.report-daemon.plist: OK
+{"daemon": "running", "config": "...", "timezone": "Asia/Seoul", "now": "...", "report_times": ["08:00", "20:00"]}
 ```
 
-Linux (systemd user unit):
+A common error:
 
-```bash
-mkdir -p ~/.config/systemd/user ~/.config/report-daemon && cp service/report-daemon.service ~/.config/systemd/user/
-printf 'REPORT_TELEGRAM_TOKEN=...\nREPORT_TELEGRAM_CHAT_ID=...\n' > ~/.config/report-daemon/env && chmod 600 ~/.config/report-daemon/env
-systemctl --user daemon-reload && systemctl --user enable --now report-daemon
-loginctl enable-linger "$USER"
-python3 scripts/report_daemon.py --status
+```text
+Bootstrap failed: 5: Input/output error
 ```
 
-Three pitfalls:
+It usually means the service is already registered (check: `python3 scripts/report_daemon.py --status` says
+`"daemon": "running"`), or that the copy in `~/Library/LaunchAgents/` was broken while editing. Run
+`python3 scripts/install.py --render-service` and paste the lines it prints: they unregister the old copy first.
+
+Four pitfalls:
 
 1. **The service has its own PATH and environment.** launchd and systemd do not read `~/.zshrc` or `~/.bashrc`
    (no nvm, pyenv or brew setup). The installer writes absolute paths for `python3` and `claude` and a PATH with their
@@ -119,8 +180,10 @@ Three pitfalls:
    The time zone is an IANA name such as `Asia/Seoul`, not `KST`. A scheduled `trigger_at` needs its offset
    (`Z` or `+09:00`). `python3 scripts/report_daemon.py --check-config` and the doctor catch all three.
 3. **Reloading.** macOS: after editing the installed plist, `launchctl kickstart -k` keeps the *old* definition;
-   run `launchctl bootout gui/$(id -u)/<label>`, then the `bootstrap` line again. Linux: `systemctl --user daemon-reload`
+   unregister and register it again (the lines `--render-service` prints). Linux: `systemctl --user daemon-reload`
    after every edit, and `loginctl enable-linger` or the service stops when you log out.
+4. **No comments when pasting.** macOS Terminal (zsh) does not treat `#` as a comment: anything you add after `#` on a
+   command line becomes part of the command. Paste the printed lines unchanged.
 
 Restart away from report times. Details and the scheduled-trigger rules: [docs/05](docs/05-reporting-daemon.md#install-daemon-lite).
 
@@ -129,24 +192,30 @@ Restart away from report times. Details and the scheduled-trigger rules: [docs/0
 For developers, or to see every step. `TEMPLATE` is your clone; run the rest from your CEO project folder.
 
 ```bash
-git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os ~/c-level-agent-os && TEMPLATE=~/c-level-agent-os
+git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os ~/c-level-agent-os
+TEMPLATE=~/c-level-agent-os
 mkdir -p ~/my-company && cd ~/my-company && git init
 mkdir -p config scripts tests .claude/agents state/report_daemon advisory_drafts/reviews
-python3 -m pip install --user -r "$TEMPLATE/requirements.txt"   # PyYAML. macOS has no `pip` command; this always works
+python3 -m pip install --user --disable-pip-version-check -r "$TEMPLATE/requirements.txt"
 cp "$TEMPLATE"/templates/CLAUDE.md.ceo CLAUDE.md && cp "$TEMPLATE"/templates/HANDOFF.md HANDOFF.md
-cp "$TEMPLATE"/templates/agents/*.md .claude/agents/          # delete the roles you do not want
+cp "$TEMPLATE"/templates/agents/*.md .claude/agents/
 cp "$TEMPLATE"/templates/{owner_action_queue,logic_agents,report_daemon,access_control}.yaml config/
 cp "$TEMPLATE"/templates/{report_prompt,autonomy_policy}.md config/
-cp "$TEMPLATE"/scripts/{logic_agent,report_daemon,doctor}.py scripts/
+cp "$TEMPLATE"/scripts/{install,logic_agent,report_daemon,doctor}.py scripts/
+cp -R "$TEMPLATE"/templates .
 cp "$TEMPLATE"/tests/test_logic_agent.py "$TEMPLATE"/tests/test_report_daemon.py tests/
-cp "$TEMPLATE"/.gitignore .                                    # keeps state/ and service/ out of git
+cp "$TEMPLATE"/.gitignore .
 ```
+
+PyYAML is the only dependency (macOS has no `pip` command; `python3 -m pip` always works). Delete the role agents you
+do not want from `.claude/agents/`. The `templates/` copy is what `--render-service` and `--reconfigure` read, and
+`.gitignore` keeps `state/` and `service/` out of git.
 
 Then edit (every `{{...}}`; numbered ones such as `UNIT_1`, `UNIT_2` mean one line per item; delete the comment at
 the top of `CLAUDE.md`):
 
 - `config/logic_agents.yaml`: one entry per project agent. **The key is the name you choose** and call
-  (`python3 scripts/logic_agent.py <your name>`); the template's `strategy_a`, `ops_bot` are examples. Set a real
+  (for example `python3 scripts/logic_agent.py shop`); the template's `strategy_a`, `ops_bot` are examples. Set a real
   `path`, the `mode`, and a `handoff` file that exists there. Protected zone: every critical-zone path in
   `denied_tools` as `Edit(//absolute/path/**)` (two slashes = absolute; one slash is relative to the settings source;
   use `Edit`, Claude Code ignores `Write(path)` rules), or `protected_zone: none` only if the owner confirms there is
@@ -155,15 +224,18 @@ the top of `CLAUDE.md`):
 - `config/report_daemon.yaml`: `timezone`, quoted `report_times`, `claude_cmd` = the output of `which claude`, `delivery`.
 - `config/autonomy_policy.md`, `config/access_control.yaml`, `HANDOFF.md`: the date, your own words, your paths.
 
-Check, then make the first call:
+Write the service file, check, then make the first calls:
 
 ```bash
-python3 scripts/doctor.py                     # every ✗ must be gone
-python3 scripts/logic_agent.py --status       # the names you chose
-python3 scripts/logic_agent.py <name> -p "Read your handoff and report status in 5 lines" --dry-run
+python3 scripts/install.py --render-service
+python3 scripts/doctor.py
+python3 scripts/logic_agent.py --status
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
+- `--render-service` writes `service/…` from `config/report_daemon.yaml` and prints the lines that register it
+  (section 3). In the doctor output every ✗ must be gone. `--status` lists the names you chose; then try one with
+  `python3 scripts/logic_agent.py shop -p "Read your handoff and report status in 5 lines" --dry-run` (`shop` = your name).
 - In the dry-run output, `--disallowedTools` must list your real critical-zone paths. The runner refuses real calls
   while a denied rule is still a placeholder.
 - Tests are optional: `python3 -m pip install --user -r requirements-dev.txt && python3 -m pytest tests -q`, or
@@ -173,7 +245,7 @@ python3 scripts/report_daemon.py --once --dry-run
   `.claude/settings*.json`; with none, expect a read-only report ending in "Needed permission: …".
   The CEO agent calls project agents itself; you do not need to run the runner by hand.
 - Prefer a virtual environment? `python3 -m venv .venv && .venv/bin/python -m pip install pyyaml`, then use
-  `.venv/bin/python` everywhere, including the service file.
+  `.venv/bin/python` everywhere, including for `--render-service` (the service runs the python that wrote it).
 
 ## 5. What this is, and what it is not
 
@@ -224,8 +296,9 @@ docs/05-reporting-daemon.md       two-layer report, scheduled triggers (design n
 templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml, report_daemon.yaml,
                                   report_prompt.md, autonomy_policy.md, access_control.yaml, HANDOFF.md
 templates/service/                launchd plist and systemd user unit for the reporting daemon
-scripts/install.py                one-step installer (questions or --answers file), ends with the check
-scripts/doctor.py                 installation check: ✓ / ⚠ / ✗ per line, exit 1 on any ✗
+scripts/install.py                one-step installer (questions or --answers file), --reconfigure,
+                                  --render-service; ends with the check
+scripts/doctor.py                 installation check: ✓ / ⚠ / ✗ per line, exit 1 on any ✗, --check-login
 scripts/logic_agent.py            headless runner
 scripts/report_daemon.py          reporting daemon-lite: two-layer report, scheduled triggers, Telegram
 tests/                            installer, runner and daemon tests (temp dirs, stub CLI, no real calls)

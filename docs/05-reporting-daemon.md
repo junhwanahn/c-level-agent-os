@@ -70,8 +70,11 @@ a Telegram bot (or `delivery: none` to start with printed and saved reports only
 CEO project root.
 
 `scripts/install.py` does step 1 from your answers (time zone, report times, the absolute `claude_cmd`, delivery),
-renders the service file of step 4 into `service/` with your paths, PATH and python filled in, and queues the
-Telegram and registration steps as owner actions. Steps 2-5 below are then the check and the registration.
+renders the service file of step 4 into `service/` with your paths, PATH and python filled in, prints the exact
+registration commands, and queues the Telegram and registration steps as owner actions. Steps 2-5 below are then the
+check and the registration. Later: `python3 scripts/install.py --render-service` writes the service file again from
+the config (and prints the commands), `--reconfigure delivery` switches between telegram and none (config, service
+file and queue together), `--reconfigure schedule` changes the time zone and report times.
 
 1. **Configure.**
    ```bash

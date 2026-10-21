@@ -21,10 +21,12 @@ check it ends with (`scripts/doctor.py`). Do not copy or fill templates by hand.
 3. Never write payment details, API keys, passwords or other credentials into any file you create, the
    answers file included. The Telegram token and chat id go into the installed service definition, by the
    owner; the installer already queued that as an owner action.
-4. The registry stays `permissions_status: proposed` until the owner changes it to `confirmed`.
+4. The registry stays `permissions_status: proposed` until the owner confirms the allowlist in their own words;
+   only then set `confirmed` and record date, by, the owner's quote and scope under `permissions_confirmed`.
 5. With the runner, never pass `--permission-mode` and never use `--continue`.
-6. A protected zone is never decided by you. `no_protected_zone: true` only when the owner said, in their
+6. A protected zone is never decided by you. `protected: none` only when the owner said, in their
    own words, that nothing in that project moves money or controls a live service. Quote them in your report.
+   An empty or missing `protected` is never read as none: the install stays NOT COMPLETE.
 
 ## Step 1 — Get the installer
 
@@ -35,6 +37,10 @@ Installing this skill copies only this file. The installer and templates live in
   and tell the owner which commit you used.
 - The destination is the owner's CEO project folder (`--dest`). Ask before using a folder that already has a
   `CLAUDE.md`; the installer keeps existing files unless `--force`, and keeps a `.bak-<time>` copy when it replaces one.
+  A kept file that disagrees with the answers (delivery, report times, projects, protected zones, service file)
+  makes the install NOT COMPLETE: the summary is read back from the files, never from the answers.
+- To change only how reports reach the owner later: `python3 scripts/install.py --reconfigure delivery --to telegram`
+  (or `--to none`), run in the CEO folder. It updates the config, the service file and the queue together.
 - PyYAML is the only dependency. If `python3 -c "import yaml"` fails, tell the owner and run
   `python3 -m pip install --user pyyaml` (macOS has no `pip` command; inside a virtual environment drop `--user`).
 
@@ -52,7 +58,9 @@ Ask these questions together and wait for the answers. Do not guess an answer; o
    `in_session` = a helper inside the CEO session), and its handoff file [HANDOFF.md].
 7. **For each project: its protected zone** — the files or folders that move real money or control live services
    (payments, pricing, live trading, send jobs, service controls). Paths relative to the project folder, `~`, or absolute.
-   If the owner says there are none, ask them to confirm it in their own words.
+   A path that does not exist makes the install NOT COMPLETE (usually a typo that leaves the real folder unprotected);
+   list it under `allow_missing` for that project only when the owner says it will be created later.
+   If the owner says there are none, ask them to confirm it in their own words and write `protected: none`.
 8. Optional: live services agents must never start, stop or restart; data sources per metric (name = path or API);
    the owner's own sentence on what the CEO may do without asking.
 
@@ -81,7 +89,8 @@ python3 <clone>/scripts/install.py --answers <answers.yaml> --dest <CEO folder>
 ```
 
 Show the owner the `== doctor ==` lines and the `== install summary ==` **verbatim**, including any
-`NO PROTECTED ZONE` box. The install is done only when the summary says `STATUS: COMPLETE` (exit code 0).
+`NO PROTECTED ZONE` box and the service commands under `next:` (the owner pastes those lines unchanged; never add
+`# comments` to them: an interactive zsh passes them on as arguments). The install is done only when the summary says `STATUS: COMPLETE` (exit code 0).
 If it says `NOT COMPLETE`, each listed line is the fix: ask the owner for the missing fact, update the answers
 file, run the installer again (`--force` only for files the owner agreed to replace). Never edit a placeholder
 away by hand to make the check pass.
@@ -95,6 +104,10 @@ python3 scripts/report_daemon.py --once --dry-run          # the report the owne
 python3 scripts/logic_agent.py --status
 python3 scripts/logic_agent.py <agent> -p "Read your handoff and report status in 5 lines" --dry-run
 ```
+
+If doctor says `claude is installed but NOT signed in`, ask the owner to run `claude` and type `/login`; do not
+work around it. `python3 scripts/doctor.py --check-login --yes` sends Claude one short test message: run it only after
+the owner agreed to that call, and quote the agreement.
 
 In the dry run, point at `--disallowedTools`: it must list the owner's real protected paths as `Edit(//absolute/...)`.
 Drop `--dry-run` only after the owner has seen it. Tell the owner: until they confirm the allowlist, each project

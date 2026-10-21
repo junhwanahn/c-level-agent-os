@@ -871,6 +871,8 @@ class Daemon:
         else:
             self.log(f"model call failed: {res['error']}")
             lines += ["", f"Model block unavailable ({res['error']}); the top block above is complete."]
+            if "logged in" in str(res["error"]).lower() or "/login" in str(res["error"]):
+                lines.append("Sign in: run `claude` in Terminal, type /login, then python3 scripts/doctor.py.")
         return "\n".join(lines), meta
 
     def run_report(self, slot: Optional[datetime], label: str) -> bool:
@@ -1201,7 +1203,8 @@ def check_config(path, env_required: bool = True) -> list:
     chat = os.environ.get(str(tg.get("chat_id_env") or ""), "").strip()
     if cfg["delivery"] == "none":
         res.append(("warn", f"delivery: none - reports are printed and saved under {cfg['log_dir']}/reports/, "
-                            f"not sent. Set delivery: telegram to receive them"))
+                            f"not sent. To receive them by Telegram: python3 scripts/install.py --reconfigure "
+                            f"delivery (or set delivery: telegram and add the variables to the service)"))
     elif token and chat:
         res.append(("ok", f"telegram env {tg['token_env']} and {tg['chat_id_env']} set (values not shown)"))
         if not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", token):

@@ -15,7 +15,7 @@ CEO 에이전트, C-level 역할 에이전트(템플릿 4개 동봉: CTO·CRO·C
 
 ## 1. 설치하면 무엇이 달라지나
 
-하루 두 번(기본 08:00, 20:00) 메시지 하나가 텔레그램이나 파일로 온다. 설치 다음 날 아침에는 이런 모습이다(보고 본문은 영문):
+하루 두 번(기본 08:00, 20:00) 메시지 하나가 텔레그램이나 파일로 온다. 설치 다음 날 아침에는 이런 모습이다(머리글과 블록 제목은 영문, 설치기가 큐에 넣는 항목은 설치 때 고른 보고 언어):
 
 ```
 [Report 2026-01-15 08:00 KST] on time
@@ -46,66 +46,120 @@ Nothing outside the queue needs you. Next CEO step: the weekly review tomorrow m
   이것이 할 일 목록 전부다. 여기에 없으면 대표가 할 일이 아니다.
 - 대표 액션은 마지막 클릭 직전까지 준비돼 있다(초안·첨부·클릭 경로). 대표는 보내고, 결제하고, 서명하고, 답한다.
 - 나머지는 CEO 에이전트가 결정·집행하고 두 번째 블록에 보고한다. 모든 입력에는 경과 시간이 붙는다.
+- 첫날에는 설치기가 큐에 넣은 설정 단계만 보인다. `cto 5h` 같은 입력 줄은 `config/report_daemon.yaml` 의 `inputs:` 에
+  에이전트 상태 파일을 적은 뒤부터 나온다.
+- 보고 받는 곳이 `none` 이면 아무것도 발송하지 않고, 보고마다 `state/report_daemon/reports/` 아래 파일로 저장한다.
+- 보고는 이 컴퓨터가 만든다. 보고 시각에 컴퓨터가 켜져 있고 잠자기 상태가 아니어야 한다(2절 용어 상자).
 
 ## 2. 빠른 시작(코딩 불필요)
 
-준비물: Mac 또는 Linux, 설치 후 로그인까지 마친 [Claude Code](https://code.claude.com/docs/en/setup)(`claude` 를 한 번 실행),
-Python 3(Mac 에서 처음 `python3` 나 `git` 을 치면 Apple 명령행 도구 설치 창이 뜬다. 설치를 누른다).
-터미널을 열고 명령 세 개를 입력한다.
+준비물: Mac 또는 Linux, 설치 후 로그인까지 마친 [Claude Code](https://code.claude.com/docs/en/setup)(터미널에서 `claude` 를
+입력하고, 물어보면 `/login` 을 입력해 브라우저 안내를 따른다), Python 3(Mac 에서 처음 `python3` 나 `git` 을 치면 Apple 명령행
+도구 설치 창이 뜬다. 설치를 누른다). 터미널을 열고 아래 명령을 입력한다.
 
 ```bash
-git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os my-company && cd my-company
+git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os my-company
+cd my-company
 python3 scripts/install.py
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
 1. **받기.** 템플릿을 새 폴더 `my-company` 로 받는다. 이 폴더가 회사의 CEO 폴더가 된다.
-   git 이 없으면 GitHub 에서 ZIP 을 받아 풀고, 그 폴더에서 터미널을 연다.
-2. **설치.** 평이한 질문 열 개 남짓. 모두 기본값이 있어 Enter 로 넘어갈 수 있다: 회사·대표 이름·타임존·보고 시각·
-   메신저(`telegram`, 또는 우선 파일로만 받는 `none`)·역할·프로젝트 폴더. 유일한 의존성 PyYAML 이 없으면 설치를 제안한다.
-   마지막에 점검을 돌리고 한 줄로 끝난다: `STATUS: COMPLETE`, 또는 고칠 항목을 나열한 `NOT COMPLETE`.
+   git 이 없으면 GitHub 에서 ZIP 을 받아 풀고, 그 폴더에서 터미널을 연다(아래 용어 상자).
+2. **설치.** 질문 12개(프로젝트 폴더를 추가하면 하나당 7개 더), 약 3분. 모든 질문에 [대괄호] 기본값이 있거나 Enter 가
+   무엇을 하는지 적혀 있어서, 끝까지 Enter 만 눌러도 설치가 끝난다(프로젝트 폴더 없이 설치되고, 설치기를 다시 실행해
+   나중에 추가할 수 있다). 언제든 Ctrl+C 로 멈출 수 있고, 마지막 질문 전에는 설치 파일을 하나도 쓰지 않는다. 유일한 의존성
+   PyYAML 이 없으면 설치를 제안한다. 마지막에 점검을 돌리고 한 줄로 끝난다: `STATUS: COMPLETE`, 또는 고칠 항목을 나열한
+   `NOT COMPLETE`. 요약은 실제로 쓴 파일을 다시 읽어 보여주고, 3절의 서비스 등록 명령을 이 컴퓨터의 경로로 채워 출력한다.
 3. **내일 아침 보고를 지금 보기.** 받게 될 보고를 화면에 출력한다(모델 호출 1회, 발송·기록 없음).
-   `--no-model` 을 붙이면 상단 블록만 본다.
+   `--no-model` 을 붙이면 상단 블록만 본다. `Not logged in` 이 나오면 `claude` 를 입력하고 `/login` 을 한 뒤 다시 실행한다.
+
+같은 폴더에서 설치기를 다시 실행하면 먼저 묻는다: 1 그대로 유지(점검만 하고 실제 파일 내용을 보여줌), 2 질문에 다시 답하고
+덮어쓰기(바뀌는 파일마다 `.bak` 사본, `HANDOFF.md` 와 큐는 바꾸지 않음), 3 중단. 보고 받는 곳만 바꾸려면
+`python3 scripts/install.py --reconfigure delivery`, 타임존이나 보고 시각만 바꾸려면 `python3 scripts/install.py --reconfigure schedule`.
 
 **보호 구역.** 설치기는 프로젝트마다 실제 돈이 움직이거나 라이브 서비스를 제어하는 파일·폴더(결제·가격·실거래·발송 작업 등)를
-묻는다. 입력한 경로는 그 프로젝트 에이전트와 CEO 세션 양쪽의 절대경로 거부 규칙이 된다. 비워 두려면 `none` 을 직접 입력해
-확인해야 하고, 설치 요약에 **NO PROTECTED ZONE** 이 상자로 크게 표시된다. 템플릿 자리표시자가 하나라도 남으면 설치는 완료가 아니다.
+묻는다. 입력한 경로는 그 프로젝트 에이전트와 CEO 세션 양쪽의 절대경로 거부 규칙이 된다. 없는 경로는 확인하지 않으면 넣지 않는다
+(오타가 나면 진짜 폴더가 보호되지 않기 때문이다). 비워 두려면 `none` 을 직접 입력해 확인해야 하고, 설치 요약에
+**NO PROTECTED ZONE** 이 상자로 크게 표시된다. 템플릿 자리표시자가 하나라도 남으면 설치는 완료가 아니다.
 
-그다음 이 폴더에서 Claude Code 를 열고(`claude`) recap 을 요청한다. 이제부터 할 일 목록은 `config/owner_action_queue.yaml` 이고,
-남은 설정 단계는 설치기가 이미 거기에 올려 두었다. 언제든 `python3 scripts/doctor.py` 로 설치 상태를 다시 점검한다
-(✓ 정상, ⚠ 읽어 볼 것, ✗ 고칠 것).
+그다음 이 폴더에서 Claude Code 를 연다: `claude` 를 입력하고 Enter, 이어서 `recap` 을 입력한다(예: "recap 해 줘").
+이제부터 할 일 목록은 `config/owner_action_queue.yaml` 이다(`open -e config/owner_action_queue.yaml` 로 연다). 남은 설정 단계는
+설치기가 이미 거기에 올려 두었다. 하나를 끝내면 Claude Code 에서 CEO 에게 알린다(예: "서비스 등록 끝났어"). CEO 가
+`status: done` 과 `done_at` 을 기록한다.
+언제든 `python3 scripts/doctor.py` 로 설치 상태를 다시 점검한다(✓ 정상, ⚠ 읽어 볼 것, ✗ 고칠 것). 모델을 부르지 않고 Claude Code
+로그인 여부까지 확인한다. `python3 scripts/doctor.py --check-login` 은 동의를 받은 뒤 Claude 에게 짧은 시험 메시지를 하나 보낸다.
 
-**에이전트에게 맡기기.** 회사 폴더에서 `npx skills add junhwanahn/c-level-agent-os` 를 실행한다. 질문이 나오면 Claude Code 와
-**Project** 범위를 고른다(Project 는 이 폴더에만 쓴다: 스킬 파일, `.claude/skills` 링크, `skills-lock.json`. Global 은 홈 폴더에 쓴다).
-그다음 에이전트에게 *"우리 회사에 C-Level Agent OS 를 설치해 줘"* 라고 요청한다. 같은 질문을 묻고, 같은 설치기를 돌리고, 점검 결과를 보여준다.
+- **프로젝트 에이전트는 도구가 적은 상태로 시작한다.** 제안된 허용 목록을 확정하기 전에는 각 에이전트가 자기 폴더의
+  `.claude/settings*.json` 이 허용한 도구만 쓴다. 결정은 대표가 한다. Claude Code 에서 CEO 에게 본인 말로 확정하면(아래 용어 상자의
+  예시) CEO 가 원문·날짜·범위를 기록한다. `config/logic_agents.yaml` 을 직접 고쳐도 된다.
+- **사용량.** 프로젝트 에이전트의 기본값은 `model: opus`, `effort: high` 다(`config/logic_agents.yaml` 의 `defaults:`). 요금제가
+  작으면 낮춘다.
+- **회사 기록.** 회사 폴더는 템플릿의 사본으로 시작하므로 git 이 여전히 템플릿 저장소를 가리킨다. 회사 기록이 그쪽으로
+  올라가지 않게 하려면 `git remote rename origin template` 을 실행한다.
+
+**에이전트에게 맡기기.** Node.js 가 필요하다(`npx --version` 으로 확인하고, 없다고 나오면 nodejs.org 에서 먼저 설치한다).
+회사 폴더에서 `npx skills add junhwanahn/c-level-agent-os` 를 실행한다. 질문이 나오면 Claude Code 와 **Project** 범위를 고른다
+(Project 는 이 폴더에만 쓴다: 스킬 파일, `.claude/skills` 링크, `skills-lock.json`. Global 은 홈 폴더에 쓴다). 그다음 에이전트에게
+*"우리 회사에 C-Level Agent OS 를 설치해 줘"* 라고 요청한다. 같은 질문을 묻고, 같은 설치기를 돌리고, 점검 결과를 보여준다.
+
+> **용어 상자**
+>
+> - **절대경로**: `/` 로 시작하는 폴더의 전체 주소(예: `/Users/나/shop`), 또는 홈 폴더를 뜻하는 `~` 로 시작하는 주소(`~/shop`).
+>   Finder 에서 폴더를 터미널 창으로 끌어다 놓으면 입력된다.
+> - **폴더에서 터미널 열기**: `cd` 와 빈칸 하나를 입력하고, Finder 에서 폴더를 창으로 끌어다 놓은 뒤 Enter.
+> - **Ctrl+C**: Control 을 누른 채 C. 실행 중인 명령을 멈춘다.
+> - **Node.js**: `npx skills add` 에만 필요하다. 설치기에는 필요 없다.
+> - **텔레그램 토큰과 chat id**: (1) 텔레그램에서 @BotFather 를 열고 `/newbot` 을 보내 받은 토큰을 복사한다. (2) 새로 만든 봇에게
+>   아무 메시지나 보낸다. (3) 브라우저에서 `https://api.telegram.org/bot`, 토큰, `/getUpdates` 를 빈칸 없이 이어 붙인 주소를 열고
+>   `"chat":{"id":` 뒤의 숫자를 복사한다. `{"ok":true,"result":[]}` 만 보이면 봇에게 메시지를 하나 더 보내고 새로고침한다.
+> - **허용 목록 확정**: Claude Code 에서 예를 들어 *"shop 의 허용 목록을 확정한다. 자기 폴더 안의 파일은 고쳐도 된다."* 라고 말한다.
+>   그러면 CEO 가 `config/logic_agents.yaml` 에 이렇게 기록한다:
+>
+>   ```yaml
+>   permissions_status: confirmed
+>   permissions_confirmed:
+>     date: "2026-01-15"
+>     by: "김민지"
+>     quote: "shop 의 허용 목록을 확정한다. 자기 폴더 안의 파일은 고쳐도 된다."
+>     scope: "shop: 제안된 allowed_tools 그대로"
+>   ```
+> - **보고 시각에 깨어 있기**: 보고는 이 컴퓨터에서 만들어지므로 보고 시각에 컴퓨터가 켜져 있고 잠자기 상태가 아니어야 한다.
+>   잠들어 있었다면 깨어난 시점이 90분 안일 때는 그때 보낸다(`delayed` 표시). 그보다 늦으면 대신 `missed` 알림 하나가 온다.
 
 ## 3. 서비스 등록(보고가 스스로 오게)
 
-설치기가 경로를 채운 서비스 파일을 이미 써 두었다: macOS 는 `service/<label>.plist`, Linux 는 `service/report-daemon.service`.
-큐의 대표 액션 `register_report_service_…` 에 이 컴퓨터용 명령이 그대로 들어 있다. 텔레그램: @BotFather 에서 `/newbot` 으로
-토큰을 받고, 봇에게 메시지를 하나 보낸 뒤 `https://api.telegram.org/bot<token>/getUpdates` 에서 `chat.id` 를 복사한다.
+설치기는 경로를 채운 서비스 파일을 `service/` 폴더에 써 두었고, 설치 요약 끝의 *2. 보고 서비스 등록* 아래에 이 컴퓨터용 명령을
+그대로 출력했다. **그 줄들을 터미널에 그대로 붙여넣는다.** 큐의 대표 액션 `register_report_service_…` 에도 같은 명령이 들어 있다.
+다시 출력하려면 `python3 scripts/install.py --render-service`.
 
-macOS(launchd 사용자 에이전트, `<label>` 은 설치기가 출력한다. 예: `com.my-company.report-daemon`):
+붙여넣을 내용은 보고 받는 곳에 따라 다르다.
 
-```bash
-cp service/<label>.plist ~/Library/LaunchAgents/ && chmod 600 ~/Library/LaunchAgents/<label>.plist
-open -e ~/Library/LaunchAgents/<label>.plist      # REPLACE_WITH_BOT_TOKEN, REPLACE_WITH_CHAT_ID 를 바꾸고 저장
-plutil -lint ~/Library/LaunchAgents/<label>.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
-python3 scripts/report_daemon.py --status          # "daemon": "running", 다음 보고 시각
+- **`none`(파일로만):** 보고는 `state/report_daemon/reports/` 아래 파일로만 저장되고, 채울 텔레그램 값이 없다. 나중에 텔레그램으로
+  바꾸려면 `python3 scripts/install.py --reconfigure delivery` 를 실행해 `telegram` 이라고 답하고, 출력되는 명령을 붙여넣는다.
+  `config/report_daemon.yaml`, 서비스 파일, 큐가 함께 바뀐다.
+- **`telegram`:** 앞의 줄들이 서비스 파일을 복사하고 그 사본을 텍스트 편집기로 연다. `REPLACE_WITH_BOT_TOKEN` 과
+  `REPLACE_WITH_CHAT_ID` 를 바꾸고(받는 법: 2절 용어 상자) 저장한 뒤 편집기를 닫고, 나머지 줄을 붙여넣는다. Linux 에서는
+  `~/.config/report-daemon/env` 를 쓰는 줄에 `PASTE_TOKEN` 과 `PASTE_CHAT_ID` 가 있다. Enter 전에 둘 다 바꾼다.
+
+macOS 에서 성공하면 이렇게 보인다(`plutil` 은 OK, `launchctl bootstrap` 은 아무것도 출력하지 않음, 상태는 running):
+
+```text
+/Users/you/Library/LaunchAgents/com.my-company.report-daemon.plist: OK
+{"daemon": "running", "config": "...", "timezone": "Asia/Seoul", "now": "...", "report_times": ["08:00", "20:00"]}
 ```
 
-Linux(systemd 사용자 유닛):
+자주 보는 오류:
 
-```bash
-mkdir -p ~/.config/systemd/user ~/.config/report-daemon && cp service/report-daemon.service ~/.config/systemd/user/
-printf 'REPORT_TELEGRAM_TOKEN=...\nREPORT_TELEGRAM_CHAT_ID=...\n' > ~/.config/report-daemon/env && chmod 600 ~/.config/report-daemon/env
-systemctl --user daemon-reload && systemctl --user enable --now report-daemon
-loginctl enable-linger "$USER"
-python3 scripts/report_daemon.py --status
+```text
+Bootstrap failed: 5: Input/output error
 ```
 
-함정 세 개:
+대개 서비스가 이미 등록돼 있다는 뜻이다(`python3 scripts/report_daemon.py --status` 가 `"daemon": "running"` 이면 정상). 또는
+`~/Library/LaunchAgents/` 의 사본을 고치다 망가뜨린 경우다. `python3 scripts/install.py --render-service` 를 실행하고 출력되는
+줄을 붙여넣는다. 옛 사본을 먼저 내린 뒤 다시 등록한다.
+
+함정 네 개:
 
 1. **서비스는 PATH 와 환경변수가 따로다.** launchd·systemd 는 `~/.zshrc`·`~/.bashrc` 를 읽지 않는다(nvm·pyenv·brew 설정 없음).
    설치기가 `python3`·`claude` 의 절대경로와 그 폴더를 담은 PATH 를 써 넣는다. 텔레그램 값은 서비스 정의(또는 systemd env 파일)에만
@@ -113,9 +167,11 @@ python3 scripts/report_daemon.py --status
 2. **YAML 따옴표와 타임존.** 시각은 따옴표 친 문자열 `"08:00"` 이다(따옴표 없는 `20:00` 은 숫자 1200 으로 읽힌다).
    타임존은 `KST` 가 아니라 `Asia/Seoul` 같은 IANA 이름이다. 예약 `trigger_at` 에는 오프셋(`Z` 또는 `+09:00`)이 필요하다.
    `python3 scripts/report_daemon.py --check-config` 와 doctor 가 셋 다 잡는다.
-3. **다시 읽히기.** macOS: 설치된 plist 를 고친 뒤 `launchctl kickstart -k` 는 *옛* 정의를 유지한다.
-   `launchctl bootout gui/$(id -u)/<label>` 후 `bootstrap` 줄을 다시 실행한다. Linux: 고칠 때마다 `systemctl --user daemon-reload`,
-   그리고 `loginctl enable-linger` 가 없으면 로그아웃할 때 서비스가 멈춘다.
+3. **다시 읽히기.** macOS: 설치된 plist 를 고친 뒤 `launchctl kickstart -k` 는 *옛* 정의를 유지한다. 내렸다가 다시 등록한다
+   (`--render-service` 가 출력하는 줄). Linux: 고칠 때마다 `systemctl --user daemon-reload`, 그리고 `loginctl enable-linger` 가 없으면
+   로그아웃할 때 서비스가 멈춘다.
+4. **붙여넣을 때 주석 금지.** macOS 터미널(zsh)은 `#` 를 주석으로 읽지 않는다. 명령 줄 뒤에 `#` 로 덧붙인 글은 명령의 일부가 된다.
+   출력된 줄을 고치지 말고 그대로 붙여넣는다.
 
 재시작은 보고 시각을 피해서 한다. 상세와 예약 트리거 규칙: [docs/05](docs/05-reporting-daemon.md#install-daemon-lite).
 
@@ -124,23 +180,28 @@ python3 scripts/report_daemon.py --status
 개발자용, 또는 단계를 하나하나 보고 싶을 때. `TEMPLATE` 은 클론 경로이고, 나머지는 CEO 프로젝트 폴더에서 실행한다.
 
 ```bash
-git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os ~/c-level-agent-os && TEMPLATE=~/c-level-agent-os
+git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os ~/c-level-agent-os
+TEMPLATE=~/c-level-agent-os
 mkdir -p ~/my-company && cd ~/my-company && git init
 mkdir -p config scripts tests .claude/agents state/report_daemon advisory_drafts/reviews
-python3 -m pip install --user -r "$TEMPLATE/requirements.txt"   # PyYAML. macOS 에는 `pip` 명령이 없다. 이 형태는 항상 된다
+python3 -m pip install --user --disable-pip-version-check -r "$TEMPLATE/requirements.txt"
 cp "$TEMPLATE"/templates/CLAUDE.md.ceo CLAUDE.md && cp "$TEMPLATE"/templates/HANDOFF.md HANDOFF.md
-cp "$TEMPLATE"/templates/agents/*.md .claude/agents/          # 쓰지 않을 역할은 지운다
+cp "$TEMPLATE"/templates/agents/*.md .claude/agents/
 cp "$TEMPLATE"/templates/{owner_action_queue,logic_agents,report_daemon,access_control}.yaml config/
 cp "$TEMPLATE"/templates/{report_prompt,autonomy_policy}.md config/
-cp "$TEMPLATE"/scripts/{logic_agent,report_daemon,doctor}.py scripts/
+cp "$TEMPLATE"/scripts/{install,logic_agent,report_daemon,doctor}.py scripts/
+cp -R "$TEMPLATE"/templates .
 cp "$TEMPLATE"/tests/test_logic_agent.py "$TEMPLATE"/tests/test_report_daemon.py tests/
-cp "$TEMPLATE"/.gitignore .                                    # state/ 와 service/ 를 git 에서 뺀다
+cp "$TEMPLATE"/.gitignore .
 ```
+
+유일한 의존성은 PyYAML 이다(macOS 에는 `pip` 명령이 없다. `python3 -m pip` 는 항상 된다). 쓰지 않을 역할은 `.claude/agents/` 에서
+지운다. `templates/` 사본은 `--render-service` 와 `--reconfigure` 가 읽는다. `.gitignore` 는 `state/` 와 `service/` 를 git 에서 뺀다.
 
 그다음 편집한다(모든 `{{...}}`. `UNIT_1`, `UNIT_2` 처럼 번호 붙은 것은 항목당 한 줄. `CLAUDE.md` 맨 위 주석은 지운다):
 
 - `config/logic_agents.yaml`: 프로젝트 에이전트당 항목 하나. **키는 직접 정한 이름**이고 그 이름으로 부른다
-  (`python3 scripts/logic_agent.py <정한 이름>`). 템플릿의 `strategy_a`, `ops_bot` 은 예시다. 실제 `path`, `mode`, 그 폴더에 있는
+  (예: `python3 scripts/logic_agent.py shop`). 템플릿의 `strategy_a`, `ops_bot` 은 예시다. 실제 `path`, `mode`, 그 폴더에 있는
   `handoff` 파일을 지정한다. 보호 구역: 크리티컬 존 경로를 모두 `denied_tools` 에 `Edit(//절대/경로/**)` 로 넣는다(슬래시 두 개 =
   절대경로, 한 개는 설정 위치 기준 상대경로. Claude Code 는 `Write(경로)` 규칙을 참조하지 않으므로 `Edit` 를 쓴다). 없다고 오너가
   확인한 경우에만 `protected_zone: none`. 같은 규칙을 `.claude/settings.json` 에 `{"permissions": {"deny": [...]}}` 로 넣어 CEO 세션도 막는다.
@@ -148,15 +209,18 @@ cp "$TEMPLATE"/.gitignore .                                    # state/ 와 serv
 - `config/report_daemon.yaml`: `timezone`, 따옴표 친 `report_times`, `claude_cmd` = `which claude` 출력, `delivery`.
 - `config/autonomy_policy.md`, `config/access_control.yaml`, `HANDOFF.md`: 날짜, 대표 본인의 말, 경로.
 
-점검 후 첫 호출:
+서비스 파일을 쓰고, 점검한 뒤 첫 호출:
 
 ```bash
-python3 scripts/doctor.py                     # ✗ 가 하나도 없어야 한다
-python3 scripts/logic_agent.py --status       # 직접 정한 이름이 보인다
-python3 scripts/logic_agent.py <이름> -p "인계 문서를 읽고 현황을 5줄로 보고" --dry-run
+python3 scripts/install.py --render-service
+python3 scripts/doctor.py
+python3 scripts/logic_agent.py --status
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
+- `--render-service` 는 `config/report_daemon.yaml` 로 `service/…` 를 쓰고 등록 명령을 출력한다(3절). doctor 출력에는 ✗ 가
+  하나도 없어야 한다. `--status` 에 직접 정한 이름이 보이면 그중 하나로
+  `python3 scripts/logic_agent.py shop -p "인계 문서를 읽고 현황을 5줄로 보고" --dry-run` 을 실행한다(`shop` 자리에 정한 이름).
 - dry-run 출력의 `--disallowedTools` 에 실제 크리티컬 존 경로가 있어야 한다. 거부 규칙이 자리표시자로 남아 있으면 실행기는 실제 호출을 거부한다.
 - 테스트는 선택이다: `python3 -m pip install --user -r requirements-dev.txt && python3 -m pytest tests -q`,
   pytest 없이 `python3 -m unittest discover tests`.
@@ -164,7 +228,8 @@ python3 scripts/report_daemon.py --once --dry-run
   `permissions_confirmed` 의 날짜·확정자·원문·범위)에는 에이전트가 그 프로젝트의 `.claude/settings*.json` 이 허용한 도구만 쓴다.
   없으면 "Needed permission: …" 으로 끝나는 읽기 전용 보고를 예상한다. 프로젝트 에이전트는 CEO 에이전트가 직접 부른다.
   대표가 실행기를 손으로 돌릴 필요는 없다.
-- 가상환경을 쓰려면: `python3 -m venv .venv && .venv/bin/python -m pip install pyyaml` 후 서비스 파일을 포함해 어디서나 `.venv/bin/python` 을 쓴다.
+- 가상환경을 쓰려면: `python3 -m venv .venv && .venv/bin/python -m pip install pyyaml` 후 `--render-service` 를 포함해 어디서나
+  `.venv/bin/python` 을 쓴다(서비스는 서비스 파일을 쓴 python 으로 실행된다).
 
 ## 5. 이것은 무엇이고, 무엇이 아닌가
 
@@ -215,15 +280,17 @@ docs/05-reporting-daemon.md       2계층 정기보고, 예약 트리거(설계 
 templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml, report_daemon.yaml,
                                   report_prompt.md, autonomy_policy.md, access_control.yaml, HANDOFF.md
 templates/service/                보고 데몬용 launchd plist, systemd user unit
-scripts/install.py                한 번에 끝나는 설치기(질문 또는 --answers 파일), 마지막에 점검
-scripts/doctor.py                 설치 점검: 줄마다 ✓ / ⚠ / ✗, ✗ 가 있으면 종료코드 1
+scripts/install.py                한 번에 끝나는 설치기(질문 또는 --answers 파일), --reconfigure,
+                                  --render-service. 마지막에 점검
+scripts/doctor.py                 설치 점검: 줄마다 ✓ / ⚠ / ✗, ✗ 가 있으면 종료코드 1, --check-login
 scripts/logic_agent.py            headless 실행기
 scripts/report_daemon.py          보고 데몬-lite: 2계층 보고, 예약 트리거, 텔레그램
 tests/                            설치기·실행기·데몬 테스트(임시 폴더, stub CLI, 실제 호출 없음)
 requirements.txt                  PyYAML(필수). requirements-dev.txt 는 pytest 추가(선택)
 ```
 
-문서 본문, 템플릿, 스킬 파일은 영문입니다. 설치기 질문은 한국어 로캘이면 한국어로 나온다(`--lang en|ko`).
+문서 본문, 템플릿, 스킬 파일은 영문입니다. 설치기의 질문·오류·요약 핵심 문구는 한국어 로캘이면 한국어로 나오고(`--lang en|ko`),
+doctor 점검 줄은 영문이다.
 
 ## 6. 개발자가 아니라면: 유료 설치 및 30일 코칭
 
