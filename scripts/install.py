@@ -408,6 +408,13 @@ def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "company"
 
 
+def service_label(company: str, dest: Path) -> str:
+    """com.<company>.report-daemon; a name without Latin letters or digits (e.g. Korean) uses the folder name, so
+    two companies on one computer do not share a label."""
+    base = re.sub(r"[^a-z0-9]+", "-", company.lower()).strip("-") or slug(dest.name)
+    return f"com.{base}.report-daemon"
+
+
 def default_name(folder: str, taken=()) -> str:
     """A valid, unused project name from a folder name (shop bot -> shop-bot; 2024 -> project-2024)."""
     base = re.sub(r"[^A-Za-z0-9_-]+", "-", folder).strip("-_")[:40]
@@ -1578,7 +1585,9 @@ def install(plan: dict, problems: list, dest: Path, force: bool = False,
     for d in DIRS:
         (dest / d).mkdir(parents=True, exist_ok=True)
     (dest / "advisory_drafts" / "reviews" / ".gitkeep").touch()
-    label = f"com.{slug(plan['company'])}.report-daemon"
+    # a folder that already has a service file keeps its label: a new one would register a second daemon
+    kept_label = next((x["label"] for x in read_actual(dest)["services"] if x["kind"] == plan["service"]), None)
+    label = kept_label or service_label(plan["company"], dest)
     service_name, service_text = render_service(plan, dest, label)
     service_rel = f"service/{service_name}" if service_name else None
 
@@ -1791,7 +1800,7 @@ def service_plan(dest: Path, messenger: Optional[str] = None) -> tuple:
     resolved, elsewhere = doctor.find_claude(r.get("claude_cmd"))
     plan = {"service": kind, "today": date.today().isoformat(), "messenger": messenger or r.get("delivery") or "none",
             "claude_cmd": resolved or elsewhere or str(r.get("claude_cmd") or "claude")}
-    return plan, label or f"com.{slug(company)}.report-daemon"
+    return plan, label or service_label(company, dest)
 
 
 def _need_templates(lang: str) -> bool:

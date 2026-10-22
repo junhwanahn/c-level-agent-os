@@ -1147,6 +1147,15 @@ class CustomerSession(Base):
                if i["id"].startswith("confirm_allowlist_")]
         self.assertEqual(len(rec), 1)  # the same step is not added twice
 
+    def test_a_korean_company_name_gets_the_folder_name_as_service_label(self):
+        rc, out = self.run_install(self.answers(company="목동 픽업", messenger="none"))
+        self.assertEqual(rc, 0, out)
+        self.assertTrue((self.dest / "service" / "com.ceo.report-daemon.plist").is_file(), out)
+        self.assertEqual(install.service_label("Saebyeok Data Lab", self.dest), "com.saebyeok-data-lab.report-daemon")
+        rc, out = self.run_install(self.answers(company="Mokdong Pickup", messenger="none"), "--force")
+        self.assertEqual(rc, 0, out)  # a re-run keeps the label of the existing service file (no second daemon)
+        self.assertEqual(sorted(p.name for p in (self.dest / "service").glob("*.plist")), ["com.ceo.report-daemon.plist"])
+
     def test_summary_starts_with_the_first_plan_and_states_the_time(self):
         rc, out = self.run_install(self.answers())
         self.assertEqual(rc, 0, out)
