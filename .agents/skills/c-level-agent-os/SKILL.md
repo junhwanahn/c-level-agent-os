@@ -54,9 +54,11 @@ Ask these questions together and wait for the answers. Do not guess an answer; o
 4. Messenger [none]: `none` (reports saved as files under `state/report_daemon/reports/`, no bot needed), or
    `telegram` (the owner creates a bot; the token goes into the registered service definition, by the owner).
 5. Roles to install [cto, cro, cfo, cmo].
-6. Projects the CEO should manage: for each one a short name (letters, digits, `_`, `-`), one line, its folder,
+6. Work folders for the agents (a project: for example the folder for the owner's documents and plans; none yet is
+   fine, one can be added later): for each one a short name (letters, digits, `_`, `-`), one line, its folder,
    how the owner works with it (`headless` = the CEO calls it, `live` = the owner's own daily terminal,
-   `in_session` = a helper inside the CEO session), and its handoff file [HANDOFF.md].
+   `in_session` = a helper inside the CEO session), and its handoff file [HANDOFF.md]; the installer creates that
+   file (title, "no work yet", an empty first-task line) when the folder has none.
 7. **For each project: its protected zone** — the files or folders that move real money or control live services
    (payments, pricing, live trading, send jobs, service controls). Paths relative to the project folder, `~`, or absolute.
    The answers file counts only the paths under `allow_missing` as checked: a path that does not exist and is not
@@ -67,10 +69,11 @@ Ask these questions together and wait for the answers. Do not guess an answer; o
    If the owner says there are none, ask them to confirm it in their own words and write `protected: none`.
    With no project at all there is nothing to ask: the installer skips the protected zone and asks when a project
    is added.
-8. Optional: live services agents must never start, stop or restart, as launchd labels or systemd unit names
-   (comma-separated; each becomes the deny rules `Bash(launchctl *name*)` and `Bash(systemctl *name*)` for every
-   agent and the CEO session); data sources per metric (name = path or API); the owner's own sentence on what the
-   CEO may do without asking.
+8. Optional: is a server or bot always running on this computer [no]? Only if yes: its service name, as a launchd
+   label or systemd unit (comma-separated; each becomes the deny rules `Bash(launchctl *name*)` and
+   `Bash(systemctl *name*)` for every agent and the CEO session). Files with numbers for every daily report
+   (name = path, relative to the CEO folder; none yet is normal; each file becomes a report input). The owner's own
+   sentence on what the CEO may do without asking.
 
 ## Step 3 — Run the installer
 
@@ -112,11 +115,16 @@ paths and ask whether each is a typo (fix it) or will be created later (then, wi
 Run from the CEO folder and show the output:
 
 ```bash
+python3 scripts/first_plan.py --dry-run                    # the first-plan command and prompt; no model call
 python3 scripts/report_daemon.py --once --dry-run          # the report the owner would receive; nothing is sent
 python3 scripts/logic_agent.py --status
 python3 scripts/logic_agent.py <agent> -p "Read your handoff and report status in 5 lines" --dry-run
 ```
 
+Then offer the first plan: `python3 scripts/first_plan.py` (about 5-15 minutes of the owner's Claude subscription;
+run it only after the owner agreed). It may write only `advisory_drafts/<date>-first-plan.md` and the queue, adds
+3 to 5 owner items (`ready: false` until prepared; fact questions `ready: true`) and prints what it added. Each daily
+report then takes 1-3 minutes; without number files it runs in plan mode.
 If doctor says `claude is installed but NOT signed in`, ask the owner to run `claude` and type `/login`; do not
 work around it. `python3 scripts/doctor.py --check-login --yes` sends Claude one short test message: run it only after
 the owner agreed to that call, and quote the agreement.

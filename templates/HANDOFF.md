@@ -9,5 +9,6 @@ Copy to: HANDOFF.md in the CEO project root.
 - Owner's instruction, verbatim: "{{OWNER_INSTRUCTION}}"
 - State: installed. Project agents: {{AGENT_SUMMARY}}. Registry `permissions_status: proposed`.
 - Waiting on the owner: the items with `owner: human` in `config/owner_action_queue.yaml`.
-- Next: [CEO] first recap, then read `config/owner_action_queue.yaml` and each project's handoff file.
-  [Owner] the queue items above.
+- Next: [Owner] `python3 scripts/first_plan.py` (the first two-week plan, 5-15 min), then the queue items above.
+  [CEO] first recap, then read `config/owner_action_queue.yaml`, the latest `advisory_drafts/*-first-plan.md` and
+  each project's handoff file.

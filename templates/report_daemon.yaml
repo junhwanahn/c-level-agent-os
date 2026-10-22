@@ -29,6 +29,9 @@ log_dir: state/report_daemon      # append-only logs (reports.jsonl, triggers.js
 # Layer 2 inputs: files your agents keep current (status notes, check outputs). Each one is passed to
 # the model with its age; older than max_age_hours (default stale_hours) = STALE, a missing file =
 # MISSING. Both are shown in the report header and the model is told not to treat them as current.
+# With no input (the start: having none is normal) the model block runs in plan mode: from CLAUDE.md, the
+# handoff notes, the open queue items and the latest advisory_drafts/*first-plan*.md it writes today's first
+# owner step, each role's state and next action, proposed owner actions and questions.
 inputs: []
 #  - path: state/cto_status.md
 #    label: cto
@@ -37,6 +40,7 @@ inputs: []
 #    label: cfo
 stale_hours: 26
 input_max_chars: 20000            # per input; anything longer is cut with an explicit marker
+plan_max_chars: 6000              # per plan-context file (handoffs, queue, first plan); cut with a marker
 
 claude_cmd: claude                # use the absolute path from `which claude`; the service PATH is not your shell's
 claude_extra_args: []             # extra CLI flags, e.g. ["--effort", "low"]; check `claude --help` for your version

@@ -28,13 +28,17 @@ What it does, in order:
      project agent (defaults.denied_tools) and for the CEO session
   4. writes the owner action queue without the template's examples (plus your real setup steps),
      the files the charter refers to (config/autonomy_policy.md, config/access_control.yaml, HANDOFF.md,
-     advisory_drafts/reviews/), config/report_daemon.yaml and a service file for launchd or systemd
-  5. copies the runner, the daemon, this installer, the check, their tests and templates/ (so --reconfigure
-     and --render-service work in the company folder), merges .gitignore, runs `git init`
+     advisory_drafts/reviews/), config/report_daemon.yaml (a data source that is a file becomes a report input)
+     and a service file for launchd or systemd; a project folder without its handoff file gets one
+     (title, "no work yet", an empty first-task line); an existing one is never touched
+  5. copies the runner, the daemon, the first-plan command, this installer, the check, their tests and
+     templates/ (so --reconfigure and --render-service work in the company folder), merges .gitignore, runs
+     `git init`
   6. runs scripts/doctor.py, then prints the summary READ BACK FROM THE WRITTEN FILES (never from the
      answers). The install is COMPLETE only when doctor reports no failure and the files say what you
      answered; a placeholder left anywhere means NOT COMPLETE (exit code 1). The service registration
-     commands are printed either way (registering does not wait for the other fixes)
+     commands are printed either way (registering does not wait for the other fixes). Next step when
+     COMPLETE: python3 scripts/first_plan.py (the first two-week plan, 5-15 minutes of your Claude plan)
 
 A folder that already has an installation: interactive asks first (1 keep it and only check it, 2 answer
 again and overwrite with .bak copies, 3 stop). With --answers, an existing file that differs is kept unless
@@ -52,7 +56,8 @@ ANSWERS (YAML; every key optional except each project's protected-zone decision)
   owner_instruction: "Agents prepare everything up to the last click; I take only that click."
   live_services: "com.myshop.worker, newsletter.service"   # launchd labels or systemd units agents must never
                                        # start, stop or restart (comma-separated, or a list)
-  data_sources: [{name: revenue, source: "~/shop/revenue.csv"}]
+  data_sources: [{name: applicants, source: "ops/applicants.csv"}]   # files with numbers for every report
+                                       # (relative to --dest, ~ or absolute); a file becomes a report input
   projects:
     - name: newsletter                 # letters, digits, _ and -
       description: "paid newsletter"
@@ -110,8 +115,10 @@ DEFAULT_INSTRUCTION = "Agents prepare everything up to the last click; I take on
 DIRS = ("config", "scripts", "tests", ".claude/agents", "state/report_daemon", "advisory_drafts/reviews", "service")
 COPIES = (("scripts/logic_agent.py", "scripts/logic_agent.py"), ("scripts/report_daemon.py", "scripts/report_daemon.py"),
           ("scripts/doctor.py", "scripts/doctor.py"), ("scripts/install.py", "scripts/install.py"),
+          ("scripts/first_plan.py", "scripts/first_plan.py"),
           ("tests/test_logic_agent.py", "tests/test_logic_agent.py"),
-          ("tests/test_report_daemon.py", "tests/test_report_daemon.py"), ("requirements.txt", "requirements.txt"),
+          ("tests/test_report_daemon.py", "tests/test_report_daemon.py"),
+          ("tests/test_first_plan.py", "tests/test_first_plan.py"), ("requirements.txt", "requirements.txt"),
           ("requirements-dev.txt", "requirements-dev.txt"), ("templates/report_prompt.md", "config/report_prompt.md"))
 GITIGNORE = ("state/", "__pycache__/", "*.pyc", ".pytest_cache/", ".DS_Store", "service/", "*.bak-*")
 # files whose presence means "this folder already has an installation"
@@ -119,22 +126,23 @@ GENERATED = ("CLAUDE.md", "config/logic_agents.yaml", "config/report_daemon.yaml
 RECORDS = ("HANDOFF.md", "config/owner_action_queue.yaml")
 # the questions of a fresh interactive install, in order, and those asked once more per project folder
 BASE_QUESTIONS = ("company", "company_one_line", "owner", "language", "timezone", "report_times", "messenger",
-                  "roles", "owner_instruction", "add_project", "live_services", "data_item")
+                  "roles", "owner_instruction", "add_project", "has_live", "data_item")
 PROJECT_QUESTIONS = ("p_path", "p_name", "p_desc", "p_mode", "p_handoff", "p_protected_item", "add_another")
 SECONDS_PER_QUESTION = 15  # the estimate shown on the first screen
 REGISTERED = {"missing": "not yet", "same": "yes, up to date", "differs": "yes, but an older copy"}
 YES = ("y", "yes", "예", "네", "응", "ㅇ")
 NO = ("n", "no", "아니오", "아니요", "아니", "ㄴ")
 NONE_WORDS = ("none", "없음")
+URL_OR_API = re.compile(r"(?i)^([a-z][a-z0-9+.-]*://|api\b)")  # a data source that is not a file
 
 # ---------------------------------------------------------------- messages (en, ko)
 MSG = {
     "intro": ("C-Level Agent OS installer. Folder: {dest}\n"
-              "{n} questions ({p} more for each project folder you add), about {m} minutes.\n"
+              "{n} questions ({p} more for each work folder you add), about {m} minutes.\n"
               "Press Enter to accept the value in [brackets]; a question without one says what Enter does.\n"
               "Stop at any time with Ctrl+C: no installation file is written before the last question.",
               "C-Level Agent OS 설치. 설치 폴더: {dest}\n"
-              "질문 {n}개(프로젝트 폴더를 추가하면 하나당 {p}개 더), 약 {m}분.\n"
+              "질문 {n}개(작업 폴더를 등록하면 하나당 {p}개 더), 약 {m}분.\n"
               "[대괄호] 안의 값이 기본값이며 Enter 를 누르면 그대로 쓴다. 대괄호가 없는 질문은 Enter 가 무엇을 하는지 적혀 있다.\n"
               "언제든 Ctrl+C 로 멈출 수 있다. 마지막 질문 전에는 설치 파일을 하나도 쓰지 않는다."),
     "stopped": ("\nStopped (Ctrl+C). No installation file was written.",
@@ -165,15 +173,18 @@ MSG = {
     "roles": ("C-level roles to install (any of cto, cro, cfo, cmo)", "설치할 C-level 역할(cto, cro, cfo, cmo 중)"),
     "owner_instruction": ("In your own words: what may the CEO agent do without asking you? (saved verbatim)",
                           "대표 본인의 말로: CEO 에이전트가 묻지 않고 해도 되는 일은? (그대로 저장된다)"),
-    "add_project": ("Add a project folder the CEO should manage (a business unit with its own folder)?",
-                    "CEO 가 관리할 프로젝트 폴더(자기 폴더가 있는 사업 단위)를 추가할까?"),
-    "add_another": ("Add another project?", "프로젝트를 하나 더 추가할까?"),
-    "keep_projects": ("Keep these {n} projects from last time: {names}?", "지난번 프로젝트 {n}개를 유지할까: {names}?"),
+    "add_project": ("Register a work folder for the agents? (e.g. a folder for your documents and plans. The "
+                    "protected zone lives inside it. None yet: N; you can add one later)",
+                    "에이전트가 일할 작업 폴더를 등록할까요? (예: 자료·기획서를 둘 폴더. 보호 구역은 이 안에 둡니다. "
+                    "지금 없으면 N, 나중에 추가 가능)"),
+    "add_another": ("Register another work folder?", "작업 폴더를 하나 더 등록할까요?"),
+    "keep_projects": ("Keep these {n} work folders from last time: {names}?",
+                      "지난번 작업 폴더 {n}개를 유지할까요: {names}?"),
     "p_path_hint": ("  Tip: drag the folder from Finder into this window to type its path.",
                     "  팁: Finder 에서 폴더를 이 터미널 창으로 끌어다 놓으면 경로가 입력된다."),
     "p_path": ("  Its folder (absolute path, or starting with ~; Enter = do not add a project)",
                "  폴더 경로(절대경로 또는 ~ 로 시작. Enter = 프로젝트를 추가하지 않고 돌아감)"),
-    "p_skipped": ("  No project added.", "  프로젝트를 추가하지 않았다."),
+    "p_skipped": ("  No work folder added.", "  작업 폴더를 추가하지 않았다."),
     "p_name": ("  Short name (letters, digits, _ or -)", "  짧은 이름(영문·숫자·_·-)"),
     "p_desc": ("  One line on what it does (optional; Enter = leave empty)", "  하는 일 한 줄(선택. Enter = 비워 둠)"),
     "p_path_missing": ("  That folder does not exist: {path}. Use it anyway?", "  그 폴더가 없다: {path}. 그래도 쓸까?"),
@@ -203,20 +214,24 @@ MSG = {
     "no_projects_note": ("No project, so the protected-zone setup is skipped. When you add a project later, "
                          "the installer asks then.",
                          "프로젝트가 없어 보호 구역 설정은 건너뜁니다. 나중에 프로젝트를 추가하면 그때 묻습니다."),
-    "live_services": ("Live services agents must never start, stop or restart: launchd labels or systemd units, "
-                      "comma-separated; each one becomes a deny rule for launchctl/systemctl (optional, e.g. "
-                      "com.myshop.worker; Enter = none)",
-                      "에이전트가 시작·중지·재시작하면 안 되는 라이브 서비스 이름: launchd 라벨이나 systemd 유닛, 쉼표로 구분. "
-                      "이름마다 launchctl/systemctl 거부 규칙이 된다(선택, 예: com.myshop.worker. Enter = 없음)"),
+    "has_live": ("Is a server or bot always running on this computer right now? Not sure: N",
+                 "지금 이 컴퓨터에서 항상 켜져 있는 서버나 봇이 있나요? 모르면 N"),
+    "live_help": ("  Help: give its service name. On a Mac that is the launchd label (launchctl list shows them), on\n"
+                  "  Linux the systemd unit (systemctl --user list-units). Agents will never start, stop or restart it.",
+                  "  도움말: 그 서비스의 이름을 적는다. Mac 은 launchd 라벨(launchctl list 로 보임), Linux 는 systemd 유닛\n"
+                  "  (systemctl --user list-units). 에이전트는 그 서비스를 시작·중지·재시작할 수 없게 된다."),
+    "live_services": ("  Its name, comma-separated if more than one (e.g. com.myshop.worker; Enter = none)",
+                      "  서비스 이름(여러 개면 쉼표로 구분, 예: com.myshop.worker. Enter = 없음)"),
     "err_service_name": ("'{v}' is not a service name (a launchd label or systemd unit such as com.myshop.worker; "
                          "letters, digits, . _ - @ :)",
                          "'{v}' 는 서비스 이름이 아니다(com.myshop.worker 같은 launchd 라벨이나 systemd 유닛. "
                          "영문·숫자·. _ - @ :)"),
-    "data_sources": ("Key numbers the CEO should read, one per line as name = path or API\n"
-                     "(optional, e.g. revenue = ~/shop/revenue.csv; empty line = done)",
-                     "CEO 가 읽을 핵심 수치, 한 줄에 하나씩 이름 = 경로 또는 API\n"
-                     "(선택, 예: revenue = ~/shop/revenue.csv. 빈 줄 = 끝)"),
-    "data_item": ("  data source", "  데이터 소스"),
+    "data_sources": ("Is there a file with numbers you want in every daily report? None yet: press Enter (having "
+                     "none now is normal). E.g. applicants = ops/applicants.csv",
+                     "매일 보고에 넣고 싶은 숫자가 담긴 파일이 있나요? 아직 없으면 Enter(지금 없는 게 정상입니다). "
+                     "예: 지원자 수 = ops/applicants.csv"),
+    "data_item": ("  name = file (relative to this folder, ~ or absolute; empty line = done)",
+                  "  이름 = 파일(이 폴더 기준, ~ 또는 절대경로. 빈 줄 = 끝)"),
     "yaml_missing": ("PyYAML (the only dependency) is missing. The command that installs it:\n  {cmd}",
                      "필수 의존성 PyYAML 이 없다. 설치 명령:\n  {cmd}"),
     "yaml_install_now": ("Run it now?", "지금 실행할까?"),
@@ -306,15 +321,31 @@ MSG = {
                          "실행해 바꾸거나(.bak 사본을 남긴다), 보고 받는 곳만 바꾸려면 "
                          "python3 scripts/install.py --reconfigure delivery"),
     "next": ("next:", "다음:"),
-    "next_report": ("1. see a report now (prints only):", "1. 지금 보고 보기(출력만):"),
-    "next_service": ("2. register the report service. The exact lines for this computer:",
-                     "2. 보고 서비스 등록. 이 컴퓨터용 명령:"),
+    "next_plan": ("1. the first plan (the CEO agent reads your files and writes a two-week plan and your first queue "
+                  "items):",
+                  "1. 첫 계획(CEO 에이전트가 파일을 읽고 2주 계획과 대표 할 일을 큐에 올린다):"),
+    "next_report": ("2. see a report now (prints only):", "2. 지금 보고 보기(출력만):"),
+    "next_service": ("register the report service. The exact lines for this computer:",
+                     "보고 서비스 등록. 이 컴퓨터용 명령:"),
     "service_anyway": ("Fix the items above first. You can register the report service now:",
                        "먼저 위 항목을 고친다. 서비스 등록은 지금 해도 된다:"),
-    "next_reregister": ("2. re-register the report service (the registered copy is older). The exact lines:",
-                        "2. 보고 서비스 다시 등록(등록된 사본이 예전 것이다). 이 컴퓨터용 명령:"),
-    "next_registered": ("2. report service: registered and up to date", "2. 보고 서비스: 등록됨, 최신"),
-    "next_agent": ("3. first project agent check:", "3. 첫 프로젝트 에이전트 점검:"),
+    "next_reregister": ("re-register the report service (the registered copy is older). The exact lines:",
+                        "보고 서비스 다시 등록(등록된 사본이 예전 것이다). 이 컴퓨터용 명령:"),
+    "next_registered": ("report service: registered and up to date", "보고 서비스: 등록됨, 최신"),
+    "next_agent": ("4. first project agent check:", "4. 첫 프로젝트 에이전트 점검:"),
+    "time_cost": ("time: the first plan takes 5-15 min, each of the {n} daily report(s) 1-3 min; all of it uses "
+                  "your own Claude subscription",
+                  "시간: 첫 계획 생성 5~15분, 매일 보고 {n}회는 각각 1~3분, 모두 본인의 Claude 구독 사용량"),
+    "inputs_line": ("numbers:  {names} (in every report, with the age of each file)",
+                    "numbers:  {names} (매일 보고에 파일마다 경과 시간과 함께 들어감)"),
+    "handoff_title": ("{name} handoff", "{name} 인계 문서"),
+    "handoff_intro": ("The note this project's agent reads first. Newest block on top.",
+                      "이 작업 폴더의 에이전트가 가장 먼저 읽는 메모. 최신 블록을 맨 위에 둔다."),
+    "handoff_head": ("created by the installer", "설치기가 만듦"),
+    "handoff_state": ("State: no work yet", "상태: 아직 작업 없음"),
+    "handoff_task": ("First task: (empty; the CEO fills it after the first plan, python3 scripts/first_plan.py)",
+                     "첫 과제: (비어 있음. 첫 계획(python3 scripts/first_plan.py) 뒤 CEO 가 채운다)"),
+    "handoff_created": ("created {path} (the note its agent reads first)", "{path} 를 만들었다(에이전트가 먼저 읽는 메모)"),
     "next_queue": ("your to-do list from now on: config/owner_action_queue.yaml (it is the top of every report)",
                    "이제부터 할 일 목록: config/owner_action_queue.yaml (모든 보고의 맨 위)"),
     "next_queue_open": ("open it: {cmd}", "여는 법: {cmd}"),
@@ -782,11 +813,13 @@ def collect_interactive(pr: Prompter, dest: Path, prev: dict) -> dict:
     raw["projects"] = projects
     if not projects:  # nothing to protect yet: one quiet line, asked again when a project is added
         print(pr.t("no_projects_note"), file=pr.out)
-    prev_live = d.get("live_services") or ""
-    prev_live = ", ".join(split_services(prev_live))
-    raw["live_services"] = pr.ask("live_services", default=prev_live, fallback="",
-                                  validate=lambda v: pr.t("err_service_name", v=service_name_error(v))
-                                  if service_name_error(v) else None)
+    prev_live = ", ".join(split_services(d.get("live_services") or ""))
+    raw["live_services"] = ""
+    if pr.yes("has_live", default=bool(prev_live)):
+        print(pr.t("live_help"), file=pr.out)
+        raw["live_services"] = pr.ask("live_services", default=prev_live, fallback="",
+                                      validate=lambda v: pr.t("err_service_name", v=service_name_error(v))
+                                      if service_name_error(v) else None)
     print(pr.t("data_sources"), file=pr.out)
     raw["data_sources"] = pr.lines("data_item") or d.get("data_sources") or []
     for k in ("block_budget", "claude_cmd", "service", "git_init"):
@@ -997,23 +1030,31 @@ def register_item(plan: dict, dest: Path, stamp: str, svc_rel: str, kind: str, l
 
 def allowlist_item(plan: dict, stamp: str) -> dict:
     ko = _ko(plan)
+    opener = "open -e" if sys.platform == "darwin" else "xdg-open"
     return {
         "id": f"confirm_allowlist_{stamp}", "due": plan["today"], "owner": "human", "status": "open", "action": "local",
         "ready": True,
-        "title": ("프로젝트 에이전트 허용 목록 확정: Claude Code 에서 CEO 에게 본인 말로 확정하면 CEO 가 원문·날짜·범위를 "
-                  "기록(직접 고쳐도 된다)" if ko else
-                  "Confirm the proposed allowlist of the project agents: say it to the CEO in Claude Code in your own "
-                  "words and it records your quote, date and scope (or edit the file yourself)"),
-        "prep": (["제안: config/logic_agents.yaml 의 에이전트별 allowed_tools (denied_tools 는 그대로 유지)",
-                  "이 폴더의 Claude Code 에서 예를 들어 \"<agent> 의 허용 목록을 확정한다. 자기 폴더 안의 파일은 고쳐도 "
-                  "된다.\" 라고 말한다. CEO 가 permissions_status: confirmed 와 permissions_confirmed(날짜·확정자·"
-                  "원문·범위)를 기록한다",
+        "title": ("프로젝트 에이전트가 쓸 수 있는 도구 범위 확인: 설치기가 제안한 목록(config/logic_agents.yaml 의 "
+                  "allowed_tools)을 읽고 괜찮으면 permissions_status 를 confirmed 로 바꾸거나, CEO 에이전트에게 "
+                  "\"허용 목록 확정\"이라고 말한다" if ko else
+                  "Check which tools the project agents may use: read the list the installer proposed (allowed_tools "
+                  "in config/logic_agents.yaml); if it is fine, change permissions_status to confirmed, or tell the "
+                  "CEO agent \"confirm the allowlist\""),
+        "prep": ([f"여는 법: {opener} config/logic_agents.yaml. 에이전트마다 allowed_tools = 쓸 수 있는 도구(제안), "
+                  "denied_tools = 금지(보호 구역, 그대로 둔다)",
+                  "가장 쉬운 길: 이 폴더에서 claude 를 열고 \"허용 목록 확정\" 이라고 말한다(범위를 줄이려면 그것도 "
+                  "말한다). CEO 가 permissions_status: confirmed 와 permissions_confirmed(날짜·확정자·원문·범위)를 기록한다",
+                  "직접 고칠 때: permissions_status: confirmed 로 바꾸고 permissions_confirmed 의 date·by·quote·scope "
+                  "네 칸도 채운다(비어 있으면 python3 scripts/doctor.py 가 ✗)",
                   "그전까지 각 에이전트는 자기 폴더 .claude/settings*.json 의 도구만 쓰고, 첫 보고는 "
                   "'Needed permission: ...' 으로 끝난다"] if ko else
-                 ["Proposed: config/logic_agents.yaml, allowed_tools per agent (denied_tools stay as they are)",
-                  "In Claude Code in this folder, for example: \"I confirm the allowlist for <agent>: it may edit files "
-                  "in its own folder.\" The CEO then sets permissions_status: confirmed and writes "
-                  "permissions_confirmed (date, by, quote, scope)",
+                 [f"Open it: {opener} config/logic_agents.yaml. Per agent, allowed_tools = the tools it may use "
+                  "(proposed), denied_tools = forbidden (the protected zone; leave them as they are)",
+                  "Easiest: open claude in this folder and say \"confirm the allowlist\" (say so if you want less). "
+                  "The CEO then sets permissions_status: confirmed and writes permissions_confirmed (date, by, quote, "
+                  "scope)",
+                  "By hand: set permissions_status: confirmed and fill the four fields date, by, quote and scope of "
+                  "permissions_confirmed (python3 scripts/doctor.py fails while one is empty)",
                   "Until then each agent has only the tools of its own .claude/settings*.json; its first report "
                   "ends with 'Needed permission: ...'"])}
 
@@ -1159,6 +1200,12 @@ def set_yaml_key(text: str, key: str, literal: str) -> str:
     raise ValueError(f"could not change {key} in place; set it by hand: {key}: {literal}")
 
 
+def report_inputs(plan: dict) -> list:
+    """The data sources that are files (not a URL or an API): each becomes an input of every report."""
+    return [{"path": s["SOURCE"], "label": s["NAME"]} for s in plan["data_sources"]
+            if s["SOURCE"].strip() and not URL_OR_API.match(s["SOURCE"].strip())]
+
+
 def render_daemon_config(plan: dict) -> str:
     t = (TEMPLATES / "report_daemon.yaml").read_text()
     t = t.replace("# Copy to: config/report_daemon.yaml   and   templates/report_prompt.md -> config/report_prompt.md",
@@ -1166,6 +1213,10 @@ def render_daemon_config(plan: dict) -> str:
     t = set_yaml_value(t, "timezone", q(plan["timezone"]))
     t = set_yaml_value(t, "report_times", "[" + ", ".join(q(x) for x in plan["report_times"]) + "]")
     t = set_yaml_value(t, "claude_cmd", q(plan["claude_cmd"]))
+    inputs = report_inputs(plan)
+    if inputs:
+        t = set_yaml_value(t, "inputs", "[" + ", ".join(f"{{path: {q(i['path'])}, label: {q(i['label'])}}}"
+                                                         for i in inputs) + "]")
     return set_yaml_value(t, "delivery", plan["messenger"])
 
 
@@ -1180,6 +1231,27 @@ def render_handoff(plan: dict) -> str:
     return render_lines((TEMPLATES / "HANDOFF.md").read_text().replace("Copy to: HANDOFF.md in the CEO project root.\n", ""),
                         {"INSTALL_DATE": plan["today"], "OWNER_INSTRUCTION": plan["owner_instruction"],
                          "AGENT_SUMMARY": agents}, {}, {})
+
+
+def render_project_handoff(plan: dict, name: str) -> str:
+    lang = "ko" if _ko(plan) else "en"
+    return render_lines((TEMPLATES / "project_HANDOFF.md").read_text(),
+                        {"TITLE": say(lang, "handoff_title", name=name), "INTRO": say(lang, "handoff_intro"),
+                         "INSTALL_DATE": plan["today"], "HEAD": say(lang, "handoff_head"),
+                         "STATE": say(lang, "handoff_state"), "FIRST_TASK": say(lang, "handoff_task")}, {}, {})
+
+
+def write_project_handoffs(plan: dict, w: "Writer", lang: str) -> None:
+    """A project folder without its handoff file gets one. Never replaces a file; skips a folder that is missing
+    and a handoff path that leaves the folder."""
+    for p in plan["projects"]:
+        folder = Path(p["path"])
+        target = (folder / p["handoff"]).resolve()
+        if not folder.is_dir() or target.exists() or not str(target).startswith(str(folder.resolve()) + os.sep):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_project_handoff(plan, p["name"]))
+        w.notes.append(say(lang, "handoff_created", path=target))
 
 
 def render_access(plan: dict, dest: Path) -> str:
@@ -1289,6 +1361,8 @@ def read_actual(dest: Path) -> dict:
     if isinstance(cfg, dict):
         report = {"delivery": str(cfg.get("delivery") or DEFAULT_DELIVERY).strip().lower(),
                   "report_times": [str(x) for x in (cfg.get("report_times") or [])],
+                  "inputs": [str((i.get("label") or i.get("path")) if isinstance(i, dict) else i)
+                             for i in (cfg.get("inputs") or []) if i],
                   "timezone": str(cfg.get("timezone") or ""),
                   "log_dir": str(cfg.get("log_dir") or "state/report_daemon"),
                   "claude_cmd": str(cfg.get("claude_cmd") or "claude")}
@@ -1538,6 +1612,7 @@ def install(plan: dict, problems: list, dest: Path, force: bool = False,
     else:
         w.write("config/owner_action_queue.yaml", render_queue(plan, items))
     w.write("HANDOFF.md", render_handoff(plan), record=True)
+    write_project_handoffs(plan, w, lang)
     added = merge_gitignore(dest)
     if added:
         w.notes.append(f".gitignore: added {' '.join(added)}")
@@ -1579,16 +1654,16 @@ def _box(lines: list) -> list:
     return ["!" * width] + [f"!!  {x}{' ' * (width - 8 - _width(x))}  !!" for x in lines] + ["!" * width]
 
 
-def service_lines(dest: Path, actual: dict, lang: str) -> list:
+def service_lines(dest: Path, actual: dict, lang: str, num: str = "") -> list:
     """The registration block for each rendered service file (printed whatever the STATUS)."""
     L = []
     r = actual["report"]
     for s in actual["services"]:
         delivery = r["delivery"] if r else DEFAULT_DELIVERY
         if s["installed"] == "same":
-            L.append(f"  {say(lang, 'next_registered')}")
+            L.append(f"  {num}{say(lang, 'next_registered')}")
             continue
-        L.append(f"  {say(lang, 'next_reregister' if s['installed'] == 'differs' else 'next_service')}")
+        L.append(f"  {num}{say(lang, 'next_reregister' if s['installed'] == 'differs' else 'next_service')}")
         for note, lines in service_blocks(dest, s["rel"], s["kind"], s["label"], delivery,
                                           registered=s["installed"] != "missing"):
             L.append(f"     {say(lang, note)}")
@@ -1641,6 +1716,8 @@ def summary_lines(dest: Path, actual: dict, rep, fixes: list, complete: bool, la
     else:
         where = say(lang, "saved_files" if r["delivery"] == "none" else "saved_also", d=r["log_dir"])
         L.append(f"reports:  {', '.join(r['report_times'])} {r['timezone']} via {r['delivery']} ({where})")
+        if r.get("inputs"):
+            L.append(say(lang, "inputs_line", names=", ".join(r["inputs"])))
     for s in actual["services"]:
         L.append(f"service:  {s['rel']} (label {s['label']}; registered: {REGISTERED[s['installed']]})")
     login = getattr(rep, "login", None)
@@ -1658,8 +1735,10 @@ def summary_lines(dest: Path, actual: dict, rep, fixes: list, complete: bool, la
     L.append(say(lang, "status_ok"))
     L += ["", say(lang, "next")]
     cd = "" if Path.cwd().resolve() == dest.resolve() else f"cd {shlex.quote(str(dest))} && "
+    L.append(f"  {say(lang, 'next_plan')}  {cd}python3 scripts/first_plan.py")
+    L.append(f"     {say(lang, 'time_cost', n=len((r or {}).get('report_times') or []) or 2)}")
     L.append(f"  {say(lang, 'next_report')}  {cd}python3 scripts/report_daemon.py --once --dry-run")
-    L += service_lines(dest, actual, lang)
+    L += service_lines(dest, actual, lang, num="3. ")
     headless = [x["name"] for x in (projects or []) if x["mode"] == "headless"]
     if headless:
         L.append(f"  {say(lang, 'next_agent')}  {cd}python3 scripts/logic_agent.py {headless[0]} "

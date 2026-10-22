@@ -47,7 +47,10 @@ Nothing outside the queue needs you. Next CEO step: the weekly review tomorrow m
 - Each owner action is prepared up to the last click (draft, attachments, click path). You send, pay, sign or answer.
 - Everything else the CEO agent decides, executes and reports in the second block, with the age of every input.
 - On the first day you see only the setup steps the installer put in the queue. Input lines such as `cto 5h` appear
-  once you list your agents' status files under `inputs:` in `config/report_daemon.yaml`.
+  once you list your agents' status files under `inputs:` in `config/report_daemon.yaml`. Until then (having no number
+  file at the start is normal) the second block runs in plan mode: from your company line, the handoff notes, the
+  open queue items and the first plan it writes today's most urgent step for you, each role's state and next action,
+  and its questions.
 - Every report is also saved as a file under `state/report_daemon/reports/`, whatever the delivery. With delivery
   `none` (the default) nothing is sent and that file is the report; with `telegram` it is the copy you can reread.
 - Your computer makes the report, so it must be on and awake at the report time (see the box in section 2).
@@ -62,17 +65,22 @@ You need a Mac or Linux computer, [Claude Code](https://code.claude.com/docs/en/
 git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os my-company
 cd my-company
 python3 scripts/install.py
+python3 scripts/first_plan.py
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
-These four lines do not yet bring tomorrow's report by themselves: a service makes the reports, so finish with
+These five lines do not yet bring tomorrow's report by themselves: a service makes the reports, so finish with
 section 3 (register the service).
 
+Time and usage: the first plan takes 5-15 minutes, each of the 2 daily reports 1-3 minutes; all of it uses your own
+Claude subscription.
+
 1. **Get it.** Downloads the template into a new folder `my-company`; that folder becomes your company's CEO folder.
+   The clone creates the folder: do not create it with mkdir first (an empty one does no harm).
    No git? Download the ZIP from GitHub, unzip it, then open Terminal in that folder (see the box below).
-2. **Install.** 12 questions (7 more for each project folder you add), about 3 minutes. Every question shows its
+2. **Install.** 12 questions (7 more for each work folder you add), about 3 minutes. Every question shows its
    default in [brackets] or says what Enter does, so pressing Enter all the way through works: you get an
-   installation without project folders and can add them later by running the installer again. Ctrl+C stops at any
+   installation without work folders and can add them later by running the installer again. Ctrl+C stops at any
    time; no installation file is written before the last question. If PyYAML (the only dependency) is missing, it
    offers to install it. Pressing Enter at *How should reports reach you?* keeps the default `none`: reports are
    saved as files and no bot token is needed. Answer `telegram` there (or later:
@@ -80,7 +88,13 @@ section 3 (register the service).
    line: `STATUS: COMPLETE`, or `NOT COMPLETE` with the exact things to fix. The summary is read back from the files
    it wrote, and it always prints the service commands for section 3 with your paths filled in, also when it says
    `NOT COMPLETE` (fix the listed items first; registering the service can be done right away).
-3. **See tomorrow's report now.** Prints the report you would receive (one model call; nothing is sent or recorded).
+3. **First plan.** The CEO agent reads your files (company line, handoff notes, queue) and writes a two-week plan to
+   `advisory_drafts/<date>-first-plan.md`: where the company stands, three lines per role, what only you can do, and
+   its questions for you. Your first 3 to 5 owner items go straight into the queue, `ready: false` until the CEO has
+   prepared them (a question for you is ready at once). It may write only that file and the queue, never the
+   protected zone. About 5-15 minutes; almost no output while it runs is normal. It ends with the file path, the
+   number of queue items added and the next command.
+4. **See tomorrow's report now.** Prints the report you would receive (one model call; nothing is sent or recorded).
    Add `--no-model` to see only the top block. If it says `Not logged in`, type `claude`, then `/login`, and try again.
 
 Running the installer again in the same folder asks first: 1 keep everything (only check it and show what the files
@@ -112,8 +126,11 @@ Claude Code is signed in without calling a model; `python3 scripts/doctor.py --c
 test message, after asking you.
 
 - **Project agents start with few tools.** Until you confirm the proposed allowlist, each one has only the tools of its
-  own folder's `.claude/settings*.json`. The decision is yours: say it to the CEO in Claude Code in your own words
-  (example in the box below) and it records your words, the date and the scope, or edit `config/logic_agents.yaml`.
+  own folder's `.claude/settings*.json`. The queue item says what to do: check which tools the project agents may use
+  by reading the list the installer proposed (`allowed_tools` in `config/logic_agents.yaml`); if it is fine, change
+  `permissions_status` to `confirmed` (and fill `date`, `by`, `quote`, `scope` under `permissions_confirmed`: the
+  doctor fails while one is empty), or tell the CEO agent "confirm the allowlist" and it records your words, the
+  date and the scope (example in the box below).
 - **Usage.** Project agents run with `model: opus` and `effort: high` by default (`defaults:` in
   `config/logic_agents.yaml`); lower them if your plan is small.
 - **Your own history.** The company folder starts as a copy of the template, so git still points at the template
@@ -154,7 +171,7 @@ company."* It asks you the same questions, runs the same installer, and shows yo
 ## 3. Register the service (reports arrive by themselves)
 
 The installer wrote the service file with your paths already filled in (`service/` folder) and printed the exact
-commands for this computer at the end of its summary, under *2. register the report service* (whatever the STATUS
+commands for this computer at the end of its summary, under *3. register the report service* (whatever the STATUS
 line says). **Paste those lines into Terminal as they are.** They are also in your queue item `register_report_service_…`. To print them again:
 `python3 scripts/install.py --render-service`.
 
@@ -219,9 +236,9 @@ cp "$TEMPLATE"/templates/CLAUDE.md.ceo CLAUDE.md && cp "$TEMPLATE"/templates/HAN
 cp "$TEMPLATE"/templates/agents/*.md .claude/agents/
 cp "$TEMPLATE"/templates/{owner_action_queue,logic_agents,report_daemon,access_control}.yaml config/
 cp "$TEMPLATE"/templates/{report_prompt,autonomy_policy}.md config/
-cp "$TEMPLATE"/scripts/{install,logic_agent,report_daemon,doctor}.py scripts/
+cp "$TEMPLATE"/scripts/{install,logic_agent,report_daemon,doctor,first_plan}.py scripts/
 cp -R "$TEMPLATE"/templates .
-cp "$TEMPLATE"/tests/test_logic_agent.py "$TEMPLATE"/tests/test_report_daemon.py tests/
+cp "$TEMPLATE"/tests/{test_logic_agent,test_report_daemon,test_first_plan}.py tests/
 cp "$TEMPLATE"/.gitignore .
 ```
 
@@ -315,11 +332,13 @@ docs/03-owner-action-queue.md     queue schema, render rules, example
 docs/04-logic-agents-headless.md  registry, permissions and path rules, session rotation, no live+headless together
 docs/05-reporting-daemon.md       two-layer report, scheduled triggers (design notes, install)
 templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml, report_daemon.yaml,
-                                  report_prompt.md, autonomy_policy.md, access_control.yaml, HANDOFF.md
+                                  report_prompt.md, first_plan_prompt.md, autonomy_policy.md, access_control.yaml,
+                                  HANDOFF.md, project_HANDOFF.md
 templates/service/                launchd plist and systemd user unit for the reporting daemon
 scripts/install.py                one-step installer (questions or --answers file), --reconfigure,
                                   --render-service; ends with the check
 scripts/doctor.py                 installation check: ✓ / ℹ / ⚠ / ✗ per line, exit 1 on any ✗, --check-login
+scripts/first_plan.py             the first two-week plan and the owner's first queue items (one model run)
 scripts/logic_agent.py            headless runner
 scripts/report_daemon.py          reporting daemon-lite: two-layer report, scheduled triggers, Telegram
 tests/                            installer, runner and daemon tests (temp dirs, stub CLI, no real calls)

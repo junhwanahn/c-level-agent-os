@@ -391,6 +391,91 @@ class Reports(Base):
         self.assertTrue(self.http.texts()[0].startswith("[Report 2026-01-15 08:00 KST] delayed 69 min"))
 
 
+class PlanMode(Base):
+    """No number file registered (the start): the model block is a plan view, never a bare "not measurable"."""
+
+    def setUp(self):
+        super().setUp()
+        (self.tmp / "CLAUDE.md").write_text("# Pickup Co CEO Agent\n\nYou are the CEO.\n\n## Company overview\n\n"
+                                            "- Pickup Co: after-school pickup matching, in preparation\n\n## CEO role\n\n- x\n")
+        (self.tmp / "HANDOFF.md").write_text("# HANDOFF\n\n## 2026-01-14 - installed\n")
+        work = self.tmp / "work"
+        work.mkdir()
+        (work / "HANDOFF.md").write_text("# work handoff\n- State: no work yet\n")
+        (self.tmp / "config" / "logic_agents.yaml").write_text(yaml.safe_dump(
+            {"agents": {"work": {"path": str(work), "handoff": "HANDOFF.md", "mode": "headless"}}}))
+        (self.tmp / ".claude" / "agents").mkdir(parents=True)
+        for r in ("cto", "cmo"):
+            (self.tmp / ".claude" / "agents" / f"{r}.md").write_text("x")
+        (self.tmp / "advisory_drafts").mkdir()
+        (self.tmp / "advisory_drafts" / "2026-01-14-first-plan.md").write_text("## 2. First two weeks by role\nCTO: forms")
+        self.queue(BASE_QUEUE + [{"id": "first_plan_survey_20260114", "due": "2026-01-20", "owner": "human",
+                                  "status": "open", "action": "external", "ready": False,
+                                  "title": "Send the parent survey", "prep": ["to prepare first: survey draft"]}])
+
+    def test_no_inputs_is_plan_mode_with_the_plan_context(self):
+        self.runner = Runner(structured(
+            headline="Prepare the parent survey this week",
+            today_first={"what": "Send reply to partner X", "why": "due today", "queue_id": "send_reply"},
+            roles=[{"role": "cto", "now": "no record yet", "next": "draft the sign-up form"},
+                   {"role": "cmo", "now": "plan written", "next": "survey questions"}],
+            proposed_actions=[{"id": "open_bank_account_20260114", "due": "2026-01-25", "owner": "human",
+                               "action": "external", "ready": False, "title": "Open the business bank account"}],
+            questions=["Which schools first?"]))
+        d = self.started()
+        self.at(2026, 1, 15, 8, 0)
+        d.tick()
+        prompt = self.runner.calls[0]["stdin"]
+        self.assertIn("Mode: plan.", prompt)
+        self.assertIn("(no number files registered yet: plan mode)", prompt)
+        for part in ("after-school pickup matching, in preparation", "### Installed roles\ncto, cmo",
+                     "## 2026-01-14 - installed", "- State: no work yet", "### Open queue items 3",
+                     "Send the parent survey", "to prepare first: survey draft", "CTO: forms",
+                     "2026-01-14-first-plan.md · age"):
+            self.assertIn(part, prompt)
+        self.assertNotIn("## CEO role", prompt)  # only the company overview of the charter
+        self.assertNotIn("{{", prompt)
+        text = self.http.texts()[0]
+        block = text.split("> Summary:", 1)[0].rsplit("\n", 2)[-2]
+        self.assertEqual(block, "> Plan mode: no number file is in the report yet (inputs: in config/report_daemon.yaml)")
+        self.assertIn("> Summary: Prepare the parent survey this week", text)
+        self.assertIn("> First for you today: Send reply to partner X [send_reply] - why: due today", text)
+        self.assertIn("> Roles 2\n- CTO: no record yet / next: draft the sign-up form\n- CMO: plan written / next: "
+                      "survey questions", text)
+        self.assertIn("> Proposed owner actions 1 (not in the queue yet; the CEO adds them once prepared)\n"
+                      "- Open the business bank account - 2026-01-25 - external", text)
+        self.assertIn("> Questions for you 1\n- Which schools first?", text)
+        self.assertNotIn("> Notable 0", text)
+        self.assertNotIn("not measurable", text)
+        ids = [i["id"] for i in yaml.safe_load((self.tmp / "config" / "owner_action_queue.yaml").read_text())]
+        self.assertNotIn("open_bank_account_20260114", ids)  # proposals are shown, never written to the queue
+
+    def test_with_inputs_it_is_metrics_mode_plus_the_plan_view(self):
+        (self.tmp / "applicants.csv").write_text("date,applicants\n2026-01-14,3\n")
+        self.runner = Runner(structured(notable=["3 applicants - (applicants, <1m)"],
+                                        roles=[{"role": "cto", "now": "form live", "next": "reminders"}]))
+        d = self.started(self.cfg(inputs=[{"path": "applicants.csv", "label": "applicants"}]))
+        self.at(2026, 1, 15, 8, 0)
+        d.tick()
+        self.assertIn("Mode: metrics.", self.runner.calls[0]["stdin"])
+        self.assertIn("### Open queue items", self.runner.calls[0]["stdin"])
+        text = self.http.texts()[0]
+        self.assertNotIn("> Plan mode", text)
+        self.assertIn("> Roles 1", text)
+        self.assertIn("> Notable 1\n- 3 applicants - (applicants, <1m)", text)
+
+    def test_without_a_first_plan_the_context_says_how_to_make_one(self):
+        (self.tmp / "advisory_drafts" / "2026-01-14-first-plan.md").unlink()
+        ctx = rd.plan_context(self.cfg(), [], self.clock())
+        self.assertIn("### Latest first plan · none yet (python3 scripts/first_plan.py writes it)", ctx)
+        self.assertIn("### Open queue items 0\n[]", ctx)
+
+    def test_check_config_says_plan_mode_as_information(self):
+        self.cfg()
+        rows = rd.check_config(self.tmp / "config" / "report_daemon.yaml", telegram_env=False)
+        self.assertTrue(any(lv == "info" and "plan mode" in m for lv, m in rows), rows)
+
+
 # ---------------------------------------------------------------- scheduled triggers
 class Triggers(Base):
     def setUp(self):

@@ -38,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 CLAUDE_SETUP_URL = "https://code.claude.com/docs/en/setup"
 PLACEHOLDER = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
 PATH_MARK = "ABSOLUTE/PATH"
-RUNTIME_VARS = {"now", "timezone", "slot", "top_block", "inputs"}  # filled by report_daemon.py at run time
+RUNTIME_VARS = {"now", "timezone", "slot", "top_block", "inputs", "mode", "plan_context"}  # filled by report_daemon.py
 TEMPLATE_EXAMPLE_IDS = {"send_partner_reply_0115", "reauth_video_api_0116", "confirm_prior_commitment_0117",
                         "weekly_review_0116", "rerun_analysis_0114"}
 CLAUDE_CANDIDATES = ("~/.local/bin/claude", "~/.claude/local/claude", "/opt/homebrew/bin/claude",

@@ -8,6 +8,11 @@ interactive session. Every poll (default 60 s) it does two things:
        top block    rendered from the owner action queue WITHOUT a model (docs/03 render rules)
        model block  `claude -p` in project_dir, tools off by default, over the `inputs` files,
                     each passed with its age (STALE / MISSING stated); structured JSON reply.
+                    Always with the plan context too (company overview of CLAUDE.md, installed roles,
+                    HANDOFF.md, each project's handoff, the open queue items, the latest
+                    advisory_drafts/*first-plan*.md). Without any `inputs` it runs in plan mode: today's
+                    first owner step, each role's state and next action, proposed owner actions,
+                    questions; never a bare "not measurable".
      If the model call fails (outage, billing, timeout), the top block is still sent with a
      one-line failure note.
   2. Scheduled triggers: open queue items with `trigger_at` + `trigger_prompt`:
@@ -85,6 +90,7 @@ DEFAULTS = {
     "inputs": [],
     "stale_hours": 26,
     "input_max_chars": 20000,
+    "plan_max_chars": 6000,
     "claude_cmd": "claude",
     "claude_extra_args": [],
     "model": None,
@@ -100,7 +106,8 @@ DEFAULTS = {
     "trigger_result_lines": 15,
 }
 _POSITIVE = ("poll_seconds", "on_time_minutes", "catchup_minutes", "timeout_s", "agent_timeout_s", "max_chunk",
-             "stale_hours", "input_max_chars", "max_notable", "max_executed", "trigger_result_lines")
+             "stale_hours", "input_max_chars", "plan_max_chars", "max_notable", "max_executed",
+             "trigger_result_lines")
 _NON_NEGATIVE = ("collision_minutes", "retry_delay_seconds")
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _OFFSET_NO_COLON = re.compile(r"([+-]\d{2})(\d{2})$")
@@ -427,13 +434,67 @@ def build_prompt(template: str, values: dict) -> str:
 def _inputs_block(files: list) -> str:
     """Prompt section for the configured input files (gather_inputs()[1:]): header with age and state, then text."""
     if not files:
-        return "(no input files configured; only the top block is available)"
+        return "(no number files registered yet: plan mode)"
     parts = []
     for r in files:
         state = "MISSING" if r["missing"] else ("STALE" if r["stale"] else "fresh")
         age = "n/a" if r["age_s"] is None else fmt_age(r["age_s"])
         parts.append(f"### {r['label']} · {r['path']} · age {age} · {state}\n{r['text']}".rstrip())
     return "\n\n".join(parts)
+
+
+def _company_overview(text: str) -> str:
+    """The '## Company overview' section of the charter (the whole head when there is none)."""
+    m = re.search(r"(?ms)^## Company overview\s*\n(.*?)(?=^## |\Z)", text)
+    return (m.group(1) if m else text[:1500]).strip()
+
+
+def _cut(text: str, limit: int) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit] + f"\n[cut by the daemon: {len(text) - limit} more characters]"
+
+
+def _file_part(title: str, path: Path, now: datetime, limit: int, missing: str = "MISSING") -> str:
+    if not path.is_file():
+        return f"### {title} · {path} · {missing}"
+    age = fmt_age(now.timestamp() - path.stat().st_mtime)
+    return f"### {title} · {path} · age {age}\n{_cut(path.read_text(errors='replace'), limit)}"
+
+
+def latest_first_plan(project_dir: Path) -> Optional[Path]:
+    plans = [p for p in (Path(project_dir) / "advisory_drafts").glob("*first-plan*.md") if p.is_file()]
+    return max(plans, key=lambda p: p.stat().st_mtime) if plans else None
+
+
+def plan_context(cfg: dict, items: list, now: datetime) -> str:
+    """What the CEO knows without number files: company overview, roles, handoffs, open queue items, first plan."""
+    pd = Path(cfg["project_dir"])
+    limit = int(cfg.get("plan_max_chars") or DEFAULTS["plan_max_chars"])
+    parts = []
+    charter = pd / "CLAUDE.md"
+    if charter.is_file():
+        parts.append(f"### Company (CLAUDE.md, company overview)\n"
+                     f"{_cut(_company_overview(charter.read_text(errors='replace')), limit)}")
+    found = {p.stem for p in (pd / ".claude" / "agents").glob("*.md")}
+    roles = [r for r in ("cto", "cro", "cfo", "cmo") if r in found] + sorted(found - {"cto", "cro", "cfo", "cmo"})
+    parts.append("### Installed roles\n" + (", ".join(roles) if roles else "(none)"))
+    parts.append(_file_part("CEO handoff (HANDOFF.md)", pd / "HANDOFF.md", now, limit))
+    for name, a in (_registry_agents(cfg) or {}).items():
+        a = a if isinstance(a, dict) else {}
+        folder = _abs(pd, a.get("path") or ".")
+        parts.append(_file_part(f"Project {name} handoff ({a.get('mode') or 'headless'})",
+                                folder / str(a.get("handoff") or "HANDOFF.md"), now, limit))
+    open_items = [{k: i[k] for k in ("id", "due", "owner", "action", "ready", "title", "prep") if k in i}
+                  for i in items if i.get("status") == "open"]
+    dump = yaml.safe_dump(open_items, sort_keys=False, allow_unicode=True, width=1000) if open_items else "[]"
+    parts.append(f"### Open queue items {len(open_items)}\n{_cut(dump, limit)}")
+    plan = latest_first_plan(pd)
+    parts.append(_file_part("Latest first plan", plan, now, limit) if plan else
+                 "### Latest first plan · none yet (python3 scripts/first_plan.py writes it)")
+    return "\n\n".join(parts)
+
+
+PLAN_KEYS = ("today_first", "roles", "proposed_actions", "questions")
 
 
 def parse_structured(text: str) -> Optional[dict]:
@@ -447,29 +508,73 @@ def parse_structured(text: str) -> Optional[dict]:
             obj = json.loads(candidate)
         except (json.JSONDecodeError, TypeError):
             continue
-        if isinstance(obj, dict) and any(k in obj for k in ("headline", "notable", "ceo_view", "stale")):
+        if isinstance(obj, dict) and any(k in obj for k in ("headline", "notable", "ceo_view", "stale") + PLAN_KEYS):
             return obj
     return None
 
 
-def render_model_block(text: str, cfg: dict, full_path: str = "") -> str:
+def _as_list(v) -> list:
+    return [] if v in (None, "", []) else [v] if isinstance(v, (str, dict)) else list(v)
+
+
+def _one_line(v) -> str:
+    return " ".join(str(v if v is not None else "").split())
+
+
+def render_model_block(text: str, cfg: dict, full_path: str = "", mode: str = "metrics") -> str:
     obj = parse_structured(text)
     if obj is None:
         return "> CEO notes (unstructured reply, shown as is)\n" + text.strip()
     out = []
+    cap = int(cfg.get("max_notable", 5))
+    more = (lambda n: f"- and {n} more" + (f" (full reply: {full_path})" if full_path else ""))
+    if mode == "plan":
+        out.append("> Plan mode: no number file is in the report yet (inputs: in config/report_daemon.yaml)")
     if obj.get("headline"):
         out.append(f"> Summary: {str(obj['headline']).strip()}")
-    notable = obj.get("notable") or []
-    notable = [notable] if isinstance(notable, (str, dict)) else list(notable)
-    cap = int(cfg.get("max_notable", 5))
-    out.append(f"> Notable {len(notable)}")
+    first = obj.get("today_first")
+    if isinstance(first, dict) and (first.get("what") or first.get("action")):
+        qid = f" [{first.get('queue_id')}]" if first.get("queue_id") else ""
+        why = f" - why: {_one_line(first.get('why'))}" if first.get("why") else ""
+        out.append(f"> First for you today: {_one_line(first.get('what') or first.get('action'))}{qid}{why}")
+    elif isinstance(first, str) and first.strip():
+        out.append(f"> First for you today: {_one_line(first)}")
+    roles = _as_list(obj.get("roles"))
+    if roles:
+        out.append(f"> Roles {len(roles)}")
+        for r in roles:
+            if isinstance(r, dict):
+                now_, nxt = _one_line(r.get("now") or r.get("status")), _one_line(r.get("next"))
+                out.append(f"- {str(r.get('role') or '?').upper()}: {now_ or '-'}" + (f" / next: {nxt}" if nxt else ""))
+            else:
+                out.append(f"- {_one_line(r)}")
+    notable = _as_list(obj.get("notable"))
+    if notable or not any(obj.get(k) for k in PLAN_KEYS):
+        out.append(f"> Notable {len(notable)}")
     for n in notable[:cap]:
         if isinstance(n, dict):
             src = f" [{n.get('source')}]" if n.get("source") else ""
             n = f"{n.get('text') or n.get('item') or json.dumps(n, ensure_ascii=False)}{src}"
         out.append(f"- {str(n).strip()}")
     if len(notable) > cap:
-        out.append(f"- and {len(notable) - cap} more" + (f" (full reply: {full_path})" if full_path else ""))
+        out.append(more(len(notable) - cap))
+    proposed = [p for p in _as_list(obj.get("proposed_actions")) if p]
+    if proposed:
+        out.append(f"> Proposed owner actions {len(proposed)} (not in the queue yet; the CEO adds them once prepared)")
+        for p in proposed[:cap]:
+            if isinstance(p, dict):
+                out.append(f"- {_one_line(p.get('title') or p.get('id'))} - {p.get('due') or 'no due'} - "
+                           f"{p.get('action') or 'no action type'}")
+            else:
+                out.append(f"- {_one_line(p)}")
+        if len(proposed) > cap:
+            out.append(more(len(proposed) - cap))
+    questions = [q for q in _as_list(obj.get("questions")) if q]
+    if questions:
+        out.append(f"> Questions for you {len(questions)}")
+        out += [f"- {_one_line(q)}" for q in questions[:cap]]
+        if len(questions) > cap:
+            out.append(more(len(questions) - cap))
     if obj.get("ceo_view"):
         out += ["> CEO view", str(obj["ceo_view"]).strip()]
     stale = obj.get("stale") or []
@@ -854,6 +959,7 @@ class Daemon:
             self.log(f"warning: {qwarn}")
         top = render_top_block(items, now.astimezone(self.tz).date(), now, cfg)
         inputs = gather_inputs(cfg, now)
+        mode = "metrics" if cfg["inputs"] else "plan"
         lines = [title, "Inputs: " + " · ".join(_input_tag(r) for r in inputs)]
         if qwarn:
             lines.append(f"Warning: {qwarn}. The top block below may be incomplete.")
@@ -870,15 +976,15 @@ class Daemon:
             res = {"ok": False, "error": f"prompt file not found: {prompt_file}", "text": "", "cost_usd": 0.0}
         else:
             prompt = build_prompt(prompt_file.read_text(), {
-                "now": fmt_local(now, self.tz), "timezone": cfg["timezone"], "slot": title,
-                "top_block": top, "inputs": _inputs_block(inputs[1:])})
+                "now": fmt_local(now, self.tz), "timezone": cfg["timezone"], "slot": title, "mode": mode,
+                "top_block": top, "inputs": _inputs_block(inputs[1:]), "plan_context": plan_context(cfg, items, now)})
             res = interpret(*self.runner(claude_command(cfg, bool(cfg["report_tools"])), prompt,
                                          str(cfg["project_dir"]), int(cfg["timeout_s"]), env_drop=self.env_drop),
                             timeout=int(cfg["timeout_s"]))
         meta.update(model_ok=res["ok"], model_error=res["error"], cost_usd=res.get("cost_usd", 0.0))
         if res["ok"]:
             full = self._save_text("reports", f"model_{_iso(now)}", res["text"])
-            lines += ["", render_model_block(res["text"], cfg, full)]
+            lines += ["", render_model_block(res["text"], cfg, full, mode)]
         else:
             self.log(f"model call failed: {res['error']}")
             lines += ["", f"Model block unavailable ({res['error']}); the top block above is complete."]
@@ -1206,6 +1312,9 @@ def check_config(path, env_required: bool = True, telegram_env: bool = True) -> 
         res.append(("ok", f"log_dir {cfg['log_dir']} writable"))
     except OSError as e:
         res.append(("error", f"log_dir {cfg['log_dir']} not writable: {e}"))
+    if not cfg["inputs"]:
+        res.append(("info", "inputs: no number file registered, so the model block runs in plan mode (today's "
+                            "first step, each role's next action, questions); add files under inputs: later"))
     for r in gather_inputs(cfg, now)[1:]:
         res.append(("warn", f"input {r['label']} missing: {r['path']}") if r["missing"]
                    else ("ok", f"input {r['label']} age {fmt_age(r['age_s'])}" + (" STALE" if r["stale"] else "")))

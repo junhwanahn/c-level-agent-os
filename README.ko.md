@@ -47,7 +47,9 @@ Nothing outside the queue needs you. Next CEO step: the weekly review tomorrow m
 - 대표 액션은 마지막 클릭 직전까지 준비돼 있다(초안·첨부·클릭 경로). 대표는 보내고, 결제하고, 서명하고, 답한다.
 - 나머지는 CEO 에이전트가 결정·집행하고 두 번째 블록에 보고한다. 모든 입력에는 경과 시간이 붙는다.
 - 첫날에는 설치기가 큐에 넣은 설정 단계만 보인다. `cto 5h` 같은 입력 줄은 `config/report_daemon.yaml` 의 `inputs:` 에
-  에이전트 상태 파일을 적은 뒤부터 나온다.
+  에이전트 상태 파일을 적은 뒤부터 나온다. 그전까지(처음에 숫자 파일이 없는 것은 정상이다) 두 번째 블록은 계획 모드로
+  나온다: 회사 소개·인계 문서·큐의 열린 항목·첫 계획을 읽고 오늘 대표가 할 가장 급한 일, 역할별 진행 상황과 다음 행동,
+  질문을 쓴다.
 - 보고는 받는 곳과 무관하게 언제나 `state/report_daemon/reports/` 아래 파일로도 저장된다. 받는 곳이 `none`(기본값)이면
   아무것도 발송하지 않고 그 파일이 곧 보고다. `telegram` 이면 다시 읽을 수 있는 사본이다.
 - 보고는 이 컴퓨터가 만든다. 보고 시각에 컴퓨터가 켜져 있고 잠자기 상태가 아니어야 한다(2절 용어 상자).
@@ -62,15 +64,19 @@ Nothing outside the queue needs you. Next CEO step: the weekly review tomorrow m
 git clone --depth 1 https://github.com/junhwanahn/c-level-agent-os my-company
 cd my-company
 python3 scripts/install.py
+python3 scripts/first_plan.py
 python3 scripts/report_daemon.py --once --dry-run
 ```
 
-이 네 줄만으로는 내일 아침 보고가 오지 않는다. 보고는 서비스가 만들므로 3절(서비스 등록)까지 마친다.
+이 다섯 줄만으로는 내일 아침 보고가 오지 않는다. 보고는 서비스가 만들므로 3절(서비스 등록)까지 마친다.
+
+시간·사용량: 첫 계획 생성 5~15분, 매일 보고 2회는 각각 1~3분, 모두 본인의 Claude 구독 사용량을 쓴다.
 
 1. **받기.** 템플릿을 새 폴더 `my-company` 로 받는다. 이 폴더가 회사의 CEO 폴더가 된다.
+   폴더는 clone 이 만듭니다. 미리 mkdir 하지 마세요(비어 있으면 무방).
    git 이 없으면 GitHub 에서 ZIP 을 받아 풀고, 그 폴더에서 터미널을 연다(아래 용어 상자).
-2. **설치.** 질문 12개(프로젝트 폴더를 추가하면 하나당 7개 더), 약 3분. 모든 질문에 [대괄호] 기본값이 있거나 Enter 가
-   무엇을 하는지 적혀 있어서, 끝까지 Enter 만 눌러도 설치가 끝난다(프로젝트 폴더 없이 설치되고, 설치기를 다시 실행해
+2. **설치.** 질문 12개(작업 폴더를 등록하면 하나당 7개 더), 약 3분. 모든 질문에 [대괄호] 기본값이 있거나 Enter 가
+   무엇을 하는지 적혀 있어서, 끝까지 Enter 만 눌러도 설치가 끝난다(작업 폴더 없이 설치되고, 설치기를 다시 실행해
    나중에 추가할 수 있다). 언제든 Ctrl+C 로 멈출 수 있고, 마지막 질문 전에는 설치 파일을 하나도 쓰지 않는다. 유일한 의존성
    PyYAML 이 없으면 설치를 제안한다. *보고를 어디로 받을까?* 에서 Enter 를 누르면 기본값 `none` 이다: 보고가 파일로 저장되고
    봇 토큰이 필요 없다. 텔레그램으로 받으려면 거기서 `telegram` 이라고 답하거나 나중에
@@ -78,7 +84,12 @@ python3 scripts/report_daemon.py --once --dry-run
    `STATUS: COMPLETE`, 또는 고칠 항목을 나열한 `NOT COMPLETE`. 요약은 실제로 쓴 파일을 다시 읽어 보여주고, 3절의 서비스
    등록 명령을 이 컴퓨터의 경로로 채워 언제나 출력한다. `NOT COMPLETE` 여도 출력한다(먼저 나열된 항목을 고친다. 서비스
    등록은 지금 해도 된다).
-3. **내일 아침 보고를 지금 보기.** 받게 될 보고를 화면에 출력한다(모델 호출 1회, 발송·기록 없음).
+3. **첫 계획.** CEO 에이전트가 파일(회사 소개·인계 문서·큐)을 읽고 2주 계획을 `advisory_drafts/<날짜>-first-plan.md` 에 쓴다:
+   회사 현황 한 문단, 역할별 첫 2주 계획 3줄, 대표만 할 수 있는 일, 대표에게 묻는 질문. 대표 할 일 3~5건은 큐에 바로
+   올라간다. CEO 가 준비를 마칠 때까지 `ready: false` 다(대표에게 묻는 사실 확인은 바로 ready). 쓸 수 있는 것은 그 파일과
+   큐뿐이고 보호 구역은 절대 건드리지 않는다. 약 5~15분, 진행 중 메시지가 거의 없어도 정상이다. 끝나면 파일 경로, 큐에
+   추가된 항목 수, 다음 명령을 보여준다.
+4. **내일 아침 보고를 지금 보기.** 받게 될 보고를 화면에 출력한다(모델 호출 1회, 발송·기록 없음).
    `--no-model` 을 붙이면 상단 블록만 본다. `Not logged in` 이 나오면 `claude` 를 입력하고 `/login` 을 한 뒤 다시 실행한다.
 
 같은 폴더에서 설치기를 다시 실행하면 먼저 묻는다: 1 그대로 유지(점검만 하고 실제 파일 내용을 보여줌), 2 질문에 다시 답하고
@@ -105,8 +116,10 @@ python3 scripts/report_daemon.py --once --dry-run
 로그인 여부까지 확인한다. `python3 scripts/doctor.py --check-login` 은 동의를 받은 뒤 Claude 에게 짧은 시험 메시지를 하나 보낸다.
 
 - **프로젝트 에이전트는 도구가 적은 상태로 시작한다.** 제안된 허용 목록을 확정하기 전에는 각 에이전트가 자기 폴더의
-  `.claude/settings*.json` 이 허용한 도구만 쓴다. 결정은 대표가 한다. Claude Code 에서 CEO 에게 본인 말로 확정하면(아래 용어 상자의
-  예시) CEO 가 원문·날짜·범위를 기록한다. `config/logic_agents.yaml` 을 직접 고쳐도 된다.
+  `.claude/settings*.json` 이 허용한 도구만 쓴다. 큐 항목이 할 일을 적어 둔다: 프로젝트 에이전트가 쓸 수 있는 도구 범위 확인.
+  설치기가 제안한 목록(`config/logic_agents.yaml` 의 `allowed_tools`)을 읽고 괜찮으면 `permissions_status` 를 `confirmed` 로
+  바꾸거나(`permissions_confirmed` 의 `date`·`by`·`quote`·`scope` 도 채운다. 비어 있으면 doctor 가 ✗), CEO 에이전트에게
+  "허용 목록 확정"이라고 말한다. 그러면 CEO 가 원문·날짜·범위를 기록한다(아래 용어 상자의 예시).
 - **사용량.** 프로젝트 에이전트의 기본값은 `model: opus`, `effort: high` 다(`config/logic_agents.yaml` 의 `defaults:`). 요금제가
   작으면 낮춘다.
 - **회사 기록.** 회사 폴더는 템플릿의 사본으로 시작하므로 git 이 여전히 템플릿 저장소를 가리킨다. 회사 기록이 그쪽으로
@@ -143,7 +156,7 @@ python3 scripts/report_daemon.py --once --dry-run
 
 ## 3. 서비스 등록(보고가 스스로 오게)
 
-설치기는 경로를 채운 서비스 파일을 `service/` 폴더에 써 두었고, 설치 요약 끝의 *2. 보고 서비스 등록* 아래에 이 컴퓨터용 명령을
+설치기는 경로를 채운 서비스 파일을 `service/` 폴더에 써 두었고, 설치 요약 끝의 *3. 보고 서비스 등록* 아래에 이 컴퓨터용 명령을
 그대로 출력했다(STATUS 줄과 무관하게). **그 줄들을 터미널에 그대로 붙여넣는다.** 큐의 대표 액션 `register_report_service_…` 에도 같은 명령이 들어 있다.
 다시 출력하려면 `python3 scripts/install.py --render-service`.
 
@@ -205,9 +218,9 @@ cp "$TEMPLATE"/templates/CLAUDE.md.ceo CLAUDE.md && cp "$TEMPLATE"/templates/HAN
 cp "$TEMPLATE"/templates/agents/*.md .claude/agents/
 cp "$TEMPLATE"/templates/{owner_action_queue,logic_agents,report_daemon,access_control}.yaml config/
 cp "$TEMPLATE"/templates/{report_prompt,autonomy_policy}.md config/
-cp "$TEMPLATE"/scripts/{install,logic_agent,report_daemon,doctor}.py scripts/
+cp "$TEMPLATE"/scripts/{install,logic_agent,report_daemon,doctor,first_plan}.py scripts/
 cp -R "$TEMPLATE"/templates .
-cp "$TEMPLATE"/tests/test_logic_agent.py "$TEMPLATE"/tests/test_report_daemon.py tests/
+cp "$TEMPLATE"/tests/{test_logic_agent,test_report_daemon,test_first_plan}.py tests/
 cp "$TEMPLATE"/.gitignore .
 ```
 
@@ -297,11 +310,13 @@ docs/03-owner-action-queue.md     큐 스키마, 렌더 규칙, 예시
 docs/04-logic-agents-headless.md  레지스트리, 권한·경로 규칙, 세션 회전, 라이브·headless 동시 금지
 docs/05-reporting-daemon.md       2계층 정기보고, 예약 트리거(설계 노트, 설치)
 templates/                        CLAUDE.md.ceo, agents/, owner_action_queue.yaml, logic_agents.yaml, report_daemon.yaml,
-                                  report_prompt.md, autonomy_policy.md, access_control.yaml, HANDOFF.md
+                                  report_prompt.md, first_plan_prompt.md, autonomy_policy.md, access_control.yaml,
+                                  HANDOFF.md, project_HANDOFF.md
 templates/service/                보고 데몬용 launchd plist, systemd user unit
 scripts/install.py                한 번에 끝나는 설치기(질문 또는 --answers 파일), --reconfigure,
                                   --render-service. 마지막에 점검
 scripts/doctor.py                 설치 점검: 줄마다 ✓ / ℹ / ⚠ / ✗, ✗ 가 있으면 종료코드 1, --check-login
+scripts/first_plan.py             첫 2주 계획과 대표 첫 할 일(큐)을 만드는 명령(모델 실행 1회)
 scripts/logic_agent.py            headless 실행기
 scripts/report_daemon.py          보고 데몬-lite: 2계층 보고, 예약 트리거, 텔레그램
 tests/                            설치기·실행기·데몬 테스트(임시 폴더, stub CLI, 실제 호출 없음)

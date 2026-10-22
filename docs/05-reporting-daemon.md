@@ -60,6 +60,7 @@ How the notes above map to the daemon:
 | Layer 1, top block | rendered from the queue with the [03](03-owner-action-queue.md) render rules, no model, plus the scheduled triggers of the next 24 h |
 | Layer 1, notable items and CEO view | one `claude -p` call in `project_dir` (tools off), JSON reply, prompt in `config/report_prompt.md` |
 | Layer 2 | the files under `inputs:` (each agent's status file), passed to that call with their age |
+| Plan context, plan mode | every call also gets the company overview of `CLAUDE.md`, the installed roles, `HANDOFF.md`, each project's handoff, the open queue items and the latest `advisory_drafts/*first-plan*.md` (`scripts/first_plan.py` writes the first one). With no `inputs:` (the start) the model block is a plan view, never a bare "not measurable": today's first owner step (from the queue), each role's state and next action, proposed owner actions (shown, never written to the queue), questions |
 | Input age | header line `Inputs: queue 2h · cto 31h STALE · cfo MISSING`; the prompt says the same |
 | Model failure | top block + `Model block unavailable (timeout after 600s); ...` |
 | Scheduled triggers | every row of the table above; state in `state/report_daemon/triggers.jsonl` |

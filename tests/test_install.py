@@ -413,10 +413,10 @@ class Questions(Base):
         self.assertEqual(rc, 0, out)
         self.assertEqual(len(asked), len(install.BASE_QUESTIONS), asked)
         n, m = len(install.BASE_QUESTIONS), -(-len(install.BASE_QUESTIONS) * install.SECONDS_PER_QUESTION // 60)
-        self.assertIn(f"{n} questions ({len(install.PROJECT_QUESTIONS)} more for each project folder you add), "
+        self.assertIn(f"{n} questions ({len(install.PROJECT_QUESTIONS)} more for each work folder you add), "
                       f"about {m} minutes", out)
         self.assertIn("Ctrl+C", out)
-        self.assertTrue(any("[y/N]" in p for p in asked if "project folder" in p))  # adding a project defaults to no
+        self.assertTrue(any("[y/N]" in p for p in asked if "work folder" in p))  # adding a project defaults to no
         self.assertIn("No project, so the protected-zone setup is skipped.", out)
         self.assertNotIn("NO PROTECTED ZONE", out)
         self.assertNotIn("!!!!", out)
@@ -437,7 +437,7 @@ class Questions(Base):
             "", "", "",                              # no more projects, no live services, no data source
         ])
         self.assertEqual(rc, 0, out)
-        self.assertIn("No project added.", out)
+        self.assertIn("No work folder added.", out)
         self.assertTrue(any(p.strip().startswith("Short name") and p.rstrip().endswith("[shop]:") for p in asked), asked)
         reg = yaml.safe_load(self.read("config/logic_agents.yaml"))
         self.assertEqual(list(reg["agents"]), ["shop"])
@@ -731,7 +731,8 @@ class Login(Base):
         # B-2: the service lines are printed whatever the STATUS, below one line that says so
         tail = out.split("STATUS: NOT COMPLETE", 1)[1]
         self.assertIn("Fix the items above first. You can register the report service now:", tail)
-        self.assertIn("2. register the report service", tail)
+        self.assertIn("  register the report service", tail)
+        self.assertNotIn("first_plan.py", tail)  # the next steps wait for COMPLETE
         self.assertIn("launchctl bootstrap gui/$(id -u)", tail)
         self.assertNotIn("\nnext:", out)
 
@@ -889,7 +890,7 @@ class LiveServices(Base):
 
     def test_interactive_refuses_a_non_name_and_takes_the_next(self):
         rc, out, asked = interactive(self, ["", "", "", "", "", "", "", "", "", "",
-                                            "뉴스레터 발송기", "com.myshop.worker", ""])
+                                            "y", "뉴스레터 발송기", "com.myshop.worker", ""])
         self.assertEqual(rc, 0, out)
         self.assertIn("is not a service name", out)
         self.assertIn("Bash(launchctl *com.myshop.worker*)", self.read("config/logic_agents.yaml"))
@@ -1057,6 +1058,115 @@ class ReviewFindings(Base):
         self.assertFalse([c for c in calls if c.startswith("auth")], calls)
 
 
+class CustomerSession(Base):
+    """Customer simulation 2026-10-22 (non-developer founder): plain questions, first plan, handoffs, number files."""
+
+    def test_plain_questions_in_korean(self):
+        rc, out, asked = interactive(self, [], lang="ko")
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(any(p.startswith("에이전트가 일할 작업 폴더를 등록할까요? (예: 자료·기획서를 둘 폴더. 보호 구역은 이 "
+                                         "안에 둡니다. 지금 없으면 N, 나중에 추가 가능) [y/N]") for p in asked), asked)
+        self.assertTrue(any(p.startswith("지금 이 컴퓨터에서 항상 켜져 있는 서버나 봇이 있나요? 모르면 N [y/N]")
+                            for p in asked), asked)
+        self.assertIn("매일 보고에 넣고 싶은 숫자가 담긴 파일이 있나요? 아직 없으면 Enter(지금 없는 게 정상입니다). "
+                      "예: 지원자 수 = ops/applicants.csv", out)
+        self.assertFalse([p for p in asked if "launchd" in p or "systemd" in p])  # jargon only in the help line
+        self.assertNotIn("도움말:", out)  # ... and that only after a yes
+        self.assertIn("시간: 첫 계획 생성 5~15분, 매일 보고 2회는 각각 1~3분, 모두 본인의 Claude 구독 사용량", out)
+
+    def test_a_live_service_only_after_a_yes_with_the_help_line(self):
+        rc, out, asked = interactive(self, [""] * 10 + ["y", "com.pickup.bot", ""])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Help: give its service name. On a Mac that is the launchd label", out)
+        self.assertTrue(any(p.strip().startswith("Its name, comma-separated") for p in asked), asked)
+        self.assertIn("Bash(launchctl *com.pickup.bot*)", self.read("config/logic_agents.yaml"))
+        rec = yaml.safe_load(self.read("config/install_answers.yaml"))
+        self.assertEqual(rec["live_services"], "com.pickup.bot")
+        rc, out, asked = interactive(self, ["2"] + [""] * 20)  # re-run: the last answer is the default (yes)
+        self.assertTrue(any(p.startswith("Is a server or bot") and "[Y/n]" in p for p in asked), asked)
+        self.assertIn("Bash(launchctl *com.pickup.bot*)", self.read("config/logic_agents.yaml"))
+
+    def test_a_number_file_becomes_a_report_input(self):
+        rc, out = self.run_install(self.answers(data_sources=[
+            {"name": "지원자 수", "source": "ops/applicants.csv"}, {"name": "site", "source": "https://example.com/api"},
+            "학원 수 = ~/pickup/academies.csv"]))
+        self.assertEqual(rc, 0, out)
+        cfg = yaml.safe_load(self.read("config/report_daemon.yaml"))
+        self.assertEqual(cfg["inputs"], [{"path": "ops/applicants.csv", "label": "지원자 수"},
+                                         {"path": "~/pickup/academies.csv", "label": "학원 수"}])
+        self.assertIn("numbers:  지원자 수, 학원 수", out)
+        self.assertIn("- site: `https://example.com/api`", self.read("CLAUDE.md"))  # the charter keeps every source
+        rep, text = self.doctor()
+        self.assertTrue(any(lv == "warn" and "input 지원자 수 missing" in m for lv, m in rep.rows), text)
+
+    def test_interactive_number_file_line(self):
+        rc, out, asked = interactive(self, [""] * 11 + ["applicants = ops/applicants.csv", ""])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(yaml.safe_load(self.read("config/report_daemon.yaml"))["inputs"],
+                         [{"path": "ops/applicants.csv", "label": "applicants"}])
+
+    def test_project_handoff_is_created_only_when_missing(self):
+        (self.notes / "HANDOFF.md").unlink()
+        a = self.answers(language="Korean")
+        a["projects"].append({"name": "notes", "path": str(self.notes), "protected": "none",
+                              "handoff": "docs/HANDOFF.md"})
+        rc, out = self.run_install(a)
+        self.assertEqual(rc, 0, out)
+        made = (self.notes / "docs" / "HANDOFF.md").read_text()
+        self.assertTrue(made.startswith("# notes 인계 문서\n"), made)
+        self.assertIn("- 상태: 아직 작업 없음", made)
+        self.assertIn("- 첫 과제: (비어 있음", made)
+        self.assertNotIn("{{", made)
+        self.assertEqual((self.shop / "HANDOFF.md").read_text(), "# handoff\n")  # an existing one is never touched
+        self.assertIn(f"created {self.notes}/docs/HANDOFF.md", out)
+        rep, text = self.doctor()
+        self.assertFalse([m for lv, m in rep.rows if "handoff file not found" in m], text)
+        (self.notes / "docs" / "HANDOFF.md").write_text("# mine\n")
+        self.run_install(a)
+        self.assertEqual((self.notes / "docs" / "HANDOFF.md").read_text(), "# mine\n")
+
+    def test_english_project_handoff(self):
+        (self.shop / "HANDOFF.md").unlink()
+        rc, out = self.run_install(self.answers())
+        self.assertEqual(rc, 0, out)
+        made = (self.shop / "HANDOFF.md").read_text()
+        self.assertIn("# shop handoff", made)
+        self.assertIn("- State: no work yet", made)
+        self.assertIn("- First task: (empty; the CEO fills it after the first plan, python3 scripts/first_plan.py)", made)
+
+    def test_allowlist_step_in_plain_words(self):
+        self.run_install(self.answers(language="Korean"))
+        items = {i["id"].rsplit("_", 1)[0]: i for i in yaml.safe_load(self.read("config/owner_action_queue.yaml"))}
+        item = items["confirm_allowlist"]
+        self.assertEqual(item["title"], "프로젝트 에이전트가 쓸 수 있는 도구 범위 확인: 설치기가 제안한 목록(config/logic_agents.yaml "
+                                        "의 allowed_tools)을 읽고 괜찮으면 permissions_status 를 confirmed 로 바꾸거나, "
+                                        "CEO 에이전트에게 \"허용 목록 확정\"이라고 말한다")
+        self.assertTrue(any("date·by·quote·scope" in x for x in item["prep"]), item["prep"])
+        self.run_install(self.answers(), "--force")
+        rec = [i for i in yaml.safe_load(self.read("config/owner_action_queue.yaml"))
+               if i["id"].startswith("confirm_allowlist_")]
+        self.assertEqual(len(rec), 1)  # the same step is not added twice
+
+    def test_summary_starts_with_the_first_plan_and_states_the_time(self):
+        rc, out = self.run_install(self.answers())
+        self.assertEqual(rc, 0, out)
+        nxt = out.split("\nnext:\n", 1)[1].splitlines()
+        self.assertTrue(nxt[0].startswith("  1. the first plan") and nxt[0].endswith("python3 scripts/first_plan.py"), nxt)
+        self.assertEqual(nxt[1], "     time: the first plan takes 5-15 min, each of the 2 daily report(s) 1-3 min; all "
+                                 "of it uses your own Claude subscription")
+        self.assertTrue(nxt[2].startswith("  2. see a report now") and nxt[2].endswith("--once --dry-run"), nxt)
+        self.assertTrue(nxt[3].startswith("  3. register the report service"), nxt)
+        self.assertTrue(any(ln.startswith("  4. first project agent check") for ln in nxt), nxt)
+        self.assertTrue((self.dest / "scripts" / "first_plan.py").is_file())
+        self.assertTrue((self.dest / "templates" / "first_plan_prompt.md").is_file())
+        r = subprocess.run([sys.executable, "scripts/first_plan.py", "--dry-run"], cwd=self.dest, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"Edit(//{str(self.dest).lstrip('/')}/config/owner_action_queue.yaml)", r.stdout)
+        self.assertIn(f"Edit(/{self.shop}/billing/**)", r.stdout)  # the protected zone, denied again
+        self.assertIn("You are the CEO agent of Saebyeok Data Lab", r.stdout)
+
+
 @unittest.skipUnless((ROOT / "docs").is_dir(), "template repository only")
 class Docs(unittest.TestCase):
     def test_policy_template_matches_docs_02(self):
@@ -1084,22 +1194,29 @@ class Docs(unittest.TestCase):
     def test_readme_question_count_matches_the_installer(self):
         n, k = len(install.BASE_QUESTIONS), len(install.PROJECT_QUESTIONS)
         m = -(-n * install.SECONDS_PER_QUESTION // 60)
-        self.assertIn(f"{n} questions ({k} more for each project folder you add), about {m} minutes",
+        self.assertIn(f"{n} questions ({k} more for each work folder you add), about {m} minutes",
                       (ROOT / "README.md").read_text())
-        self.assertIn(f"질문 {n}개(프로젝트 폴더를 추가하면 하나당 {k}개 더), 약 {m}분", (ROOT / "README.ko.md").read_text())
+        self.assertIn(f"질문 {n}개(작업 폴더를 등록하면 하나당 {k}개 더), 약 {m}분", (ROOT / "README.ko.md").read_text())
 
     def test_readmes_state_what_the_installer_does(self):
         """REPORT3 K1, K6, B-1..B-3, proposal 15: the README promises what the code does, in both languages."""
         en = (ROOT / "README.md").read_text()
         ko = (ROOT / "README.ko.md").read_text()
         for text, phrases in (
-            (en, ["These four lines do not yet bring tomorrow's report by themselves",
+            (en, ["These five lines do not yet bring tomorrow's report by themselves",
+                  "python3 scripts/first_plan.py", "the first plan takes 5-15 minutes, each of the 2 daily reports 1-3 "
+                  "minutes; all of it uses your own\nClaude subscription",
+                  "The clone creates the folder: do not create it with mkdir first (an empty one does no harm)",
+                  "tell the CEO agent \"confirm the allowlist\"",
                   "keeps the default `none`", "`config/install_answers.yaml`",
                   "`--answers` counts only the paths listed under `allow_missing` as checked",
                   "stops before it writes any file", "also when it says\n   `NOT COMPLETE`",
                   "(whatever the STATUS\nline says)", "Every report is also saved as a file under",
                   "Without any\nproject there is nothing to protect yet", "`launchctl` and `systemctl`"]),
-            (ko, ["이 네 줄만으로는 내일 아침 보고가 오지 않는다", "기본값 `none`", "`config/install_answers.yaml`",
+            (ko, ["이 다섯 줄만으로는 내일 아침 보고가 오지 않는다", "python3 scripts/first_plan.py",
+                  "첫 계획 생성 5~15분, 매일 보고 2회는 각각 1~3분, 모두 본인의 Claude 구독 사용량",
+                  "폴더는 clone 이 만듭니다. 미리 mkdir 하지 마세요(비어 있으면 무방).",
+                  "CEO 에이전트에게\n  \"허용 목록 확정\"이라고 말한다", "기본값 `none`", "`config/install_answers.yaml`",
                   "`--answers` 는 `allow_missing` 에\n적은 경로만 확인한 것으로 본다", "파일을 하나도 쓰지 않고 멈춘다",
                   "`NOT COMPLETE` 여도 출력한다", "(STATUS 줄과 무관하게)", "언제나 `state/report_daemon/reports/`",
                   "프로젝트가 하나도 없으면 아직 보호할 것이 없으므로", "`launchctl`·`systemctl`"])):
